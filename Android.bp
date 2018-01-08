@@ -12,13 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-subdirs = [
-    "c2hal",
-    "docs",
-    "test",
-    "utils",
-]
-
 cc_defaults {
     name: "hidl-gen-defaults",
     cflags: [
@@ -35,6 +28,7 @@ cc_defaults {
     cflags: [
         "-Wall",
         "-Werror",
+        "-Wextra-semi",
     ],
     product_variables: {
         debuggable: {

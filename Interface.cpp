@@ -389,8 +389,7 @@ bool Interface::fillGetDebugInfoMethod(Method *method) const {
                 [](auto &out) {
                     out << "_hidl_cb(";
                     out.block([&] {
-                        out << "::android::hardware::details::debuggable()"
-                            << "? getpid() : -1 /* pid */,\n"
+                        out << "::android::hardware::details::getPidIfSharable(),\n"
                             << "::android::hardware::details::debuggable()"
                             << "? reinterpret_cast<uint64_t>(this) : 0 /* ptr */,\n"
                             << sArch << "\n";
@@ -404,10 +403,9 @@ bool Interface::fillGetDebugInfoMethod(Method *method) const {
             const Type &refInfo = method->results().front()->type();
             out << refInfo.getJavaType(false /* forInitializer */) << " info = new "
                 << refInfo.getJavaType(true /* forInitializer */) << "();\n"
-                // TODO(b/34777099): PID for java.
-                << "info.pid = -1;\n"
+                << "info.pid = android.os.HidlSupport.getPidIfSharable();\n"
                 << "info.ptr = 0;\n"
-                << "info.arch = android.hidl.base.V1_0.DebugInfo.Architecture.UNKNOWN;"
+                << "info.arch = android.hidl.base.V1_0.DebugInfo.Architecture.UNKNOWN;\n"
                 << "return info;";
         } } } /* javaImpl */
     );
@@ -534,6 +532,11 @@ status_t Interface::validate() const {
     if (err != OK) return err;
 
     return Scope::validate();
+}
+
+void Interface::getAlignmentAndSize(size_t* align, size_t* size) const {
+    *align = 8;
+    *size = 8;
 }
 
 status_t Interface::validateUniqueNames() const {
@@ -755,8 +758,7 @@ void Interface::emitReaderWriter(
         out << "{\n";
         out.indent();
 
-        const std::string binderName = "_hidl_" + name + "_binder";
-
+        const std::string binderName = "_hidl_binder";
         out << "::android::sp<::android::hardware::IBinder> "
             << binderName << ";\n";
 
@@ -817,8 +819,8 @@ void Interface::emitReaderWriter(
     }
 }
 
-status_t Interface::emitGlobalTypeDeclarations(Formatter &out) const {
-    status_t status = Scope::emitGlobalTypeDeclarations(out);
+status_t Interface::emitPackageTypeDeclarations(Formatter& out) const {
+    status_t status = Scope::emitPackageTypeDeclarations(out);
     if (status != OK) {
         return status;
     }

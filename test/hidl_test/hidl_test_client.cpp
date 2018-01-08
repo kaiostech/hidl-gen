@@ -10,7 +10,7 @@
 
 #include <android/hidl/allocator/1.0/IAllocator.h>
 #include <android/hidl/memory/1.0/IMemory.h>
-
+#include <android/hidl/memory/token/1.0/IMemoryToken.h>
 #include <android/hidl/token/1.0/ITokenManager.h>
 
 #include <android/hardware/tests/bar/1.0/BnHwBar.h>
@@ -66,6 +66,7 @@
 
 #include <hidl/ServiceManagement.h>
 #include <hidl/Status.h>
+#include <hidlmemory/HidlMemoryToken.h>
 #include <hidlmemory/mapping.h>
 
 #include <utils/Condition.h>
@@ -113,6 +114,7 @@ using ::android::hardware::Void;
 using ::android::hardware::hidl_array;
 using ::android::hardware::hidl_death_recipient;
 using ::android::hardware::hidl_memory;
+using ::android::hardware::HidlMemory;
 using ::android::hardware::hidl_string;
 using ::android::hardware::hidl_vec;
 using ::android::hidl::allocator::V1_0::IAllocator;
@@ -120,6 +122,8 @@ using ::android::hidl::base::V1_0::IBase;
 using ::android::hidl::manager::V1_1::IServiceManager;
 using ::android::hidl::manager::V1_0::IServiceNotification;
 using ::android::hidl::memory::V1_0::IMemory;
+using ::android::hidl::memory::token::V1_0::IMemoryToken;
+using ::android::hidl::memory::block::V1_0::MemoryBlock;
 using ::android::hidl::token::V1_0::ITokenManager;
 using ::android::sp;
 using ::android::wp;
@@ -133,16 +137,8 @@ using ::android::TOLERANCE_NS;
 using ::android::ONEWAY_TOLERANCE_NS;
 using std::to_string;
 
-bool isLibraryOpen(const std::string &lib) {
-    std::ifstream ifs("/proc/self/maps");
-    for (std::string line; std::getline(ifs, line);) {
-        if (line.size() >= lib.size() && line.substr(line.size() - lib.size()) == lib) {
-            return true;
-        }
-    }
-
-    return false;
-}
+template <typename T>
+using hidl_enum_iterator = ::android::hardware::hidl_enum_iterator<T>;
 
 template <typename T>
 static inline ::testing::AssertionResult isOk(const ::android::hardware::Return<T> &ret) {
@@ -428,20 +424,6 @@ public:
     }
 };
 
-// does not work with linker configurations since libs are statically included
-TEST_F(HidlTest, DISABLED_PreloadTest) {
-    // in passthrough mode, this will already be opened
-    if (mode == BINDERIZED) {
-        using android::hardware::preloadPassthroughService;
-
-        static const std::string kLib = "android.hardware.tests.inheritance@1.0-impl.so";
-
-        EXPECT_FALSE(isLibraryOpen(kLib));
-        preloadPassthroughService<IParent>();
-        EXPECT_TRUE(isLibraryOpen(kLib));
-    }
-}
-
 TEST_F(HidlTest, ToStringTest) {
     using namespace android::hardware;
 
@@ -482,6 +464,38 @@ TEST_F(HidlTest, PassthroughLookupTest) {
     EXPECT_NE(nullptr, IFoo::getService("::::::::", true /* getStub */).get());
     EXPECT_NE(nullptr, IFoo::getService("/////", true /* getStub */).get());
     EXPECT_NE(nullptr, IFoo::getService("\n", true /* getStub */).get());
+}
+
+TEST_F(HidlTest, EnumIteratorTest) {
+    using Empty = ::android::hardware::tests::foo::V1_0::EnumIterators::Empty;
+    using Grandchild = ::android::hardware::tests::foo::V1_0::EnumIterators::Grandchild;
+    using SkipsValues = ::android::hardware::tests::foo::V1_0::EnumIterators::SkipsValues;
+    using MultipleValues = ::android::hardware::tests::foo::V1_0::EnumIterators::MultipleValues;
+
+    for (const auto value : hidl_enum_iterator<Empty>()) {
+        (void)value;
+        EXPECT_TRUE(false) << "Empty iterator should not iterate";
+    }
+
+    auto it1 = hidl_enum_iterator<Grandchild>().begin();
+    EXPECT_EQ(Grandchild::A, *it1++);
+    EXPECT_EQ(Grandchild::B, *it1++);
+    EXPECT_EQ(hidl_enum_iterator<Grandchild>().end(), it1);
+
+    auto it2 = hidl_enum_iterator<SkipsValues>().begin();
+    EXPECT_EQ(SkipsValues::A, *it2++);
+    EXPECT_EQ(SkipsValues::B, *it2++);
+    EXPECT_EQ(SkipsValues::C, *it2++);
+    EXPECT_EQ(SkipsValues::D, *it2++);
+    EXPECT_EQ(SkipsValues::E, *it2++);
+    EXPECT_EQ(hidl_enum_iterator<SkipsValues>().end(), it2);
+
+    auto it3 = hidl_enum_iterator<MultipleValues>().begin();
+    EXPECT_EQ(MultipleValues::A, *it3++);
+    EXPECT_EQ(MultipleValues::B, *it3++);
+    EXPECT_EQ(MultipleValues::C, *it3++);
+    EXPECT_EQ(MultipleValues::D, *it3++);
+    EXPECT_EQ(hidl_enum_iterator<MultipleValues>().end(), it3);
 }
 
 TEST_F(HidlTest, EnumToStringTest) {
@@ -878,6 +892,59 @@ TEST_F(HidlTest, BatchSharedMemory) {
     }
 }
 
+TEST_F(HidlTest, MemoryBlock) {
+    const uint8_t kValue = 0xCA;
+    using ::android::hardware::IBinder;
+    using ::android::hardware::interfacesEqual;
+    using ::android::hardware::toBinder;
+
+    sp<HidlMemory> mem;
+    EXPECT_OK(ashmemAllocator->allocate(1024, [&](bool success, const hidl_memory& _mem) {
+        ASSERT_TRUE(success);
+        mem = HidlMemory::getInstance(_mem);
+    }));
+    memoryTest->set(*mem);
+    Return<sp<IMemoryToken>> tokenRet = memoryTest->get();
+    EXPECT_OK(tokenRet);
+    sp<IMemoryToken> token = tokenRet;
+    EXPECT_NE(nullptr, token.get());
+    EXPECT_OK(token->get([&](const hidl_memory& mem) {
+        sp<IMemory> memory = mapMemory(mem);
+
+        EXPECT_NE(nullptr, memory.get());
+
+        uint8_t* data = static_cast<uint8_t*>(static_cast<void*>(memory->getPointer()));
+        EXPECT_NE(data, nullptr);
+
+        EXPECT_EQ(memory->getSize(), mem.size());
+
+        memory->update();
+        memset(data, 0, memory->getSize());
+        memory->commit();
+
+        memoryTest->fillMemory(mem, kValue);
+        memory->commit();
+    }));
+    MemoryBlock blk = {token, 0x200 /* size */, 0x100 /* offset */};
+    EXPECT_OK(memoryTest->haveSomeMemoryBlock(blk, [&](const MemoryBlock& blkBack) {
+        sp<IMemoryToken> tokenBack = blkBack.token;
+        EXPECT_TRUE(interfacesEqual(token, tokenBack));
+        EXPECT_EQ(blkBack.size, 0x200ULL);
+        EXPECT_EQ(blkBack.offset, 0x100ULL);
+        blk = blkBack;
+    }));
+
+    sp<IMemoryToken> mtoken = blk.token;
+    mtoken->get([&](const hidl_memory& mem) {
+        sp<IMemory> memory = mapMemory(mem);
+        uint8_t* data = static_cast<uint8_t*>(static_cast<void*>(memory->getPointer()));
+        EXPECT_NE(data, nullptr);
+        for (size_t i = 0; i < mem.size(); i++) {
+            EXPECT_EQ(kValue, data[i]);
+        }
+    });
+}
+
 TEST_F(HidlTest, NullSharedMemory) {
     hidl_memory memory{};
 
@@ -893,6 +960,23 @@ TEST_F(HidlTest, FooGetDescriptorTest) {
         EXPECT_EQ(desc, mode == BINDERIZED
                 ? IBar::descriptor // service is actually IBar in binderized mode
                 : IFoo::descriptor); // dlopened, so service is IFoo
+    }));
+}
+
+TEST_F(HidlTest, FooConvertToBoolIfSmallTest) {
+    hidl_vec<IFoo::Union> u = {
+        {.intValue = 7}, {.intValue = 0}, {.intValue = 1}, {.intValue = 8},
+    };
+    EXPECT_OK(foo->convertToBoolIfSmall(IFoo::Discriminator::INT, u, [&](const auto& res) {
+        ASSERT_EQ(4u, res.size());
+        EXPECT_EQ(IFoo::Discriminator::INT, res[0].discriminator);
+        EXPECT_EQ(u[0].intValue, res[0].value.intValue);
+        EXPECT_EQ(IFoo::Discriminator::BOOL, res[1].discriminator);
+        EXPECT_EQ(static_cast<bool>(u[1].intValue), res[1].value.boolValue);
+        EXPECT_EQ(IFoo::Discriminator::BOOL, res[2].discriminator);
+        EXPECT_EQ(static_cast<bool>(u[2].intValue), res[2].value.boolValue);
+        EXPECT_EQ(IFoo::Discriminator::INT, res[3].discriminator);
+        EXPECT_EQ(u[3].intValue, res[3].value.intValue);
     }));
 }
 

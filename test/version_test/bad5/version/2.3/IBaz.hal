@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-package hidl.tests.vendor@1.1;
+package test.version.version@2.3;
 
-import hidl.tests.vendor@1.0::IVendor;
+interface IBaz {
 
-interface IVendor extends @1.0::IVendor {
-    doAdditionalFunctionality();
 };

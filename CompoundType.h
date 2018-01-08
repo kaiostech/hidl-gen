@@ -119,8 +119,8 @@ struct CompoundType : public Scope {
 
     status_t emitTypeDeclarations(Formatter &out) const override;
     void emitTypeForwardDeclaration(Formatter& out) const override;
-    status_t emitGlobalTypeDeclarations(Formatter &out) const override;
-    status_t emitGlobalHwDeclarations(Formatter &out) const override;
+    status_t emitPackageTypeDeclarations(Formatter& out) const override;
+    status_t emitPackageHwDeclarations(Formatter& out) const override;
 
     status_t emitTypeDefinitions(Formatter& out, const std::string& prefix) const override;
 
@@ -139,6 +139,7 @@ struct CompoundType : public Scope {
 
     void getAlignmentAndSize(size_t *align, size_t *size) const;
 
+    bool containsInterface() const;
 private:
     Style mStyle;
     std::vector<NamedReference<Type>*>* mFields;
