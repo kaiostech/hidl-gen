@@ -177,7 +177,7 @@ func removeCoreDependencies(mctx android.LoadHookContext, dependencies []string)
 }
 
 func hidlGenCommand(lang string, roots []string, name *fqName) *string {
-	cmd := "$(location hidl-gen) -o $(genDir)"
+	cmd := "$(location hidl-gen) -d $(depfile) -o $(genDir)"
 	cmd += " -L" + lang
 	cmd += " " + strings.Join(wrap("-r", roots, ""), " ")
 	cmd += " " + name.string()
@@ -226,20 +226,22 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 	})
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-		Name:  proptools.StringPtr(name.sourcesName()),
-		Owner: i.properties.Owner,
-		Tools: []string{"hidl-gen"},
-		Cmd:   hidlGenCommand("c++-sources", roots, name),
-		Srcs:  i.properties.Srcs,
+		Name:    proptools.StringPtr(name.sourcesName()),
+		Depfile: proptools.BoolPtr(true),
+		Owner:   i.properties.Owner,
+		Tools:   []string{"hidl-gen"},
+		Cmd:     hidlGenCommand("c++-sources", roots, name),
+		Srcs:    i.properties.Srcs,
 		Out: concat(wrap(name.dir(), interfaces, "All.cpp"),
 			wrap(name.dir(), types, ".cpp")),
 	})
 	mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-		Name:  proptools.StringPtr(name.headersName()),
-		Owner: i.properties.Owner,
-		Tools: []string{"hidl-gen"},
-		Cmd:   hidlGenCommand("c++-headers", roots, name),
-		Srcs:  i.properties.Srcs,
+		Name:    proptools.StringPtr(name.headersName()),
+		Depfile: proptools.BoolPtr(true),
+		Owner:   i.properties.Owner,
+		Tools:   []string{"hidl-gen"},
+		Cmd:     hidlGenCommand("c++-headers", roots, name),
+		Srcs:    i.properties.Srcs,
 		Out: concat(wrap(name.dir()+"I", interfaces, ".h"),
 			wrap(name.dir()+"Bs", interfaces, ".h"),
 			wrap(name.dir()+"BnHw", interfaces, ".h"),
@@ -306,32 +308,35 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 
 	if shouldGenerateJava {
 		mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-			Name:  proptools.StringPtr(name.javaSourcesName()),
-			Owner: i.properties.Owner,
-			Tools: []string{"hidl-gen"},
-			Cmd:   hidlGenCommand("java", roots, name),
-			Srcs:  i.properties.Srcs,
+			Name:    proptools.StringPtr(name.javaSourcesName()),
+			Depfile: proptools.BoolPtr(true),
+			Owner:   i.properties.Owner,
+			Tools:   []string{"hidl-gen"},
+			Cmd:     hidlGenCommand("java", roots, name),
+			Srcs:    i.properties.Srcs,
 			Out: concat(wrap(name.sanitizedDir()+"I", interfaces, ".java"),
 				wrap(name.sanitizedDir(), i.properties.Types, ".java")),
 		})
 		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory(true)), &javaProperties{
 			Name:              proptools.StringPtr(name.javaName()),
 			Owner:             i.properties.Owner,
+			Sdk_version:       proptools.StringPtr("system_current"),
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
 			Srcs:              []string{":" + name.javaSourcesName()},
-			Libs:              append(javaDependencies, "hwbinder"),
+			Libs:              javaDependencies,
 		})
 	}
 
 	if shouldGenerateJavaConstants {
 		mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-			Name:  proptools.StringPtr(name.javaConstantsSourcesName()),
-			Owner: i.properties.Owner,
-			Tools: []string{"hidl-gen"},
-			Cmd:   hidlGenCommand("java-constants", roots, name),
-			Srcs:  i.properties.Srcs,
-			Out:   []string{name.sanitizedDir() + "Constants.java"},
+			Name:    proptools.StringPtr(name.javaConstantsSourcesName()),
+			Depfile: proptools.BoolPtr(true),
+			Owner:   i.properties.Owner,
+			Tools:   []string{"hidl-gen"},
+			Cmd:     hidlGenCommand("java-constants", roots, name),
+			Srcs:    i.properties.Srcs,
+			Out:     []string{name.sanitizedDir() + "Constants.java"},
 		})
 		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory(true)), &javaProperties{
 			Name:              proptools.StringPtr(name.javaConstantsName()),
@@ -343,20 +348,22 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 	}
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-		Name:  proptools.StringPtr(name.adapterHelperSourcesName()),
-		Owner: i.properties.Owner,
-		Tools: []string{"hidl-gen"},
-		Cmd:   hidlGenCommand("c++-adapter-sources", roots, name),
-		Srcs:  i.properties.Srcs,
-		Out:   wrap(name.dir()+"A", concat(interfaces, types), ".cpp"),
+		Name:    proptools.StringPtr(name.adapterHelperSourcesName()),
+		Depfile: proptools.BoolPtr(true),
+		Owner:   i.properties.Owner,
+		Tools:   []string{"hidl-gen"},
+		Cmd:     hidlGenCommand("c++-adapter-sources", roots, name),
+		Srcs:    i.properties.Srcs,
+		Out:     wrap(name.dir()+"A", concat(interfaces, types), ".cpp"),
 	})
 	mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-		Name:  proptools.StringPtr(name.adapterHelperHeadersName()),
-		Owner: i.properties.Owner,
-		Tools: []string{"hidl-gen"},
-		Cmd:   hidlGenCommand("c++-adapter-headers", roots, name),
-		Srcs:  i.properties.Srcs,
-		Out:   wrap(name.dir()+"A", concat(interfaces, types), ".h"),
+		Name:    proptools.StringPtr(name.adapterHelperHeadersName()),
+		Depfile: proptools.BoolPtr(true),
+		Owner:   i.properties.Owner,
+		Tools:   []string{"hidl-gen"},
+		Cmd:     hidlGenCommand("c++-adapter-headers", roots, name),
+		Srcs:    i.properties.Srcs,
+		Out:     wrap(name.dir()+"A", concat(interfaces, types), ".h"),
 	})
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
@@ -389,12 +396,13 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 		Group_static_libs:        proptools.BoolPtr(true),
 	})
 	mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.GenRuleFactory), &genruleProperties{
-		Name:  proptools.StringPtr(name.adapterSourcesName()),
-		Owner: i.properties.Owner,
-		Tools: []string{"hidl-gen"},
-		Cmd:   hidlGenCommand("c++-adapter-main", roots, name),
-		Srcs:  i.properties.Srcs,
-		Out:   []string{"main.cpp"},
+		Name:    proptools.StringPtr(name.adapterSourcesName()),
+		Depfile: proptools.BoolPtr(true),
+		Owner:   i.properties.Owner,
+		Tools:   []string{"hidl-gen"},
+		Cmd:     hidlGenCommand("c++-adapter-main", roots, name),
+		Srcs:    i.properties.Srcs,
+		Out:     []string{"main.cpp"},
 	})
 	mctx.CreateModule(android.ModuleFactoryAdaptor(cc.TestFactory), &ccProperties{
 		Name:              proptools.StringPtr(name.adapterName()),

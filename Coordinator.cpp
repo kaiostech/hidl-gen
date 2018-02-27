@@ -55,12 +55,20 @@ void Coordinator::setRootPath(const std::string &rootPath) {
     }
 }
 
+void Coordinator::setOutputPath(const std::string& outputPath) {
+    mOutputPath = outputPath;
+}
+
 void Coordinator::setVerbose(bool verbose) {
     mVerbose = verbose;
 }
 
 bool Coordinator::isVerbose() const {
     return mVerbose;
+}
+
+void Coordinator::setDepFile(const std::string& depFile) {
+    mDepFile = depFile;
 }
 
 const std::string& Coordinator::getOwner() const {
@@ -92,9 +100,13 @@ void Coordinator::addDefaultPackagePath(const std::string& root, const std::stri
     addPackagePath(root, path, nullptr /* error */);
 }
 
-Formatter Coordinator::getFormatter(const std::string& outputPath, const FQName& fqName,
-                                    Location location, const std::string& fileName) const {
-    std::string filepath = getFilepath(outputPath, fqName, location, fileName);
+Formatter Coordinator::getFormatter(const FQName& fqName, Location location,
+                                    const std::string& fileName) const {
+    if (location == Location::STANDARD_OUT) {
+        return Formatter(stdout);
+    }
+
+    std::string filepath = getFilepath(fqName, location, fileName);
 
     onFileAccess(filepath, "w");
 
@@ -113,9 +125,9 @@ Formatter Coordinator::getFormatter(const std::string& outputPath, const FQName&
     return Formatter(file);
 }
 
-std::string Coordinator::getFilepath(const std::string& outputPath, const FQName& fqName,
-                                     Location location, const std::string& fileName) const {
-    std::string path = outputPath;
+std::string Coordinator::getFilepath(const FQName& fqName, Location location,
+                                     const std::string& fileName) const {
+    std::string path = mOutputPath;
 
     switch (location) {
         case Location::DIRECT: { /* nothing */
@@ -139,6 +151,15 @@ std::string Coordinator::getFilepath(const std::string& outputPath, const FQName
 }
 
 void Coordinator::onFileAccess(const std::string& path, const std::string& mode) const {
+    if (mode == "r") {
+        // This is a global list. It's not cleared when a second fqname is processed for
+        // two reasons:
+        // 1). If there is a bug in hidl-gen, the dependencies on the first project from
+        //     the second would be required to recover correctly when the bug is fixed.
+        // 2). This option is never used in Android builds.
+        mReadFiles.insert(StringHelper::LTrim(path, mRootPath));
+    }
+
     if (!mVerbose) {
         return;
     }
@@ -147,6 +168,27 @@ void Coordinator::onFileAccess(const std::string& path, const std::string& mode)
             "VERBOSE: file access %s %s\n", path.c_str(), mode.c_str());
 }
 
+status_t Coordinator::writeDepFile(const std::string& forFile) const {
+    // No dep file requested
+    if (mDepFile.empty()) return OK;
+
+    onFileAccess(mDepFile, "w");
+
+    FILE* file = fopen(mDepFile.c_str(), "w");
+    if (file == nullptr) {
+        fprintf(stderr, "ERROR: could not open dep file at %s.\n", mDepFile.c_str());
+        return UNKNOWN_ERROR;
+    }
+
+    Formatter out(file, 2 /* spacesPerIndent */);
+    out << StringHelper::LTrim(forFile, mOutputPath) << ": \\\n";
+    out.indent([&] {
+        for (const std::string& file : mReadFiles) {
+            out << StringHelper::LTrim(file, mRootPath) << " \\\n";
+        }
+    });
+    return OK;
+}
 
 AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
                         Enforce enforcement) const {
@@ -182,7 +224,7 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
     path.append(fqName.name());
     path.append(".hal");
 
-    AST *ast = new AST(this, path);
+    AST* ast = new AST(this, &Hash::getHash(path));
 
     if (typesAST != NULL) {
         // If types.hal for this AST's package existed, make it's defined
@@ -190,13 +232,14 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
         ast->addImportedAST(typesAST);
     }
 
-    onFileAccess(ast->getFilename(), "r");
     if (parseFile(ast) != OK || ast->postParse() != OK) {
         delete ast;
         ast = nullptr;
 
         return nullptr;
     }
+
+    onFileAccess(path, "r");
 
     status_t err = OK;
     if (ast->package().package() != fqName.package()
@@ -451,7 +494,7 @@ status_t Coordinator::isTypesOnlyPackage(const FQName& package, bool* result) co
 
 status_t Coordinator::addUnreferencedTypes(const std::vector<FQName>& packageInterfaces,
                                            std::set<FQName>* unreferencedDefinitions,
-                                           std::set<FQName>* unreferencedImports) {
+                                           std::set<FQName>* unreferencedImports) const {
     CHECK(unreferencedDefinitions != nullptr);
     CHECK(unreferencedImports != nullptr);
 
@@ -693,7 +736,10 @@ Coordinator::HashStatus Coordinator::checkHash(const FQName& fqName) const {
 
     std::string hashPath = makeAbsolute(getPackageRootPath(fqName)) + "/current.txt";
     std::string error;
-    std::vector<std::string> frozen = Hash::lookupHash(hashPath, fqName.string(), &error);
+    bool fileExists;
+    std::vector<std::string> frozen =
+        Hash::lookupHash(hashPath, fqName.string(), &error, &fileExists);
+    if (fileExists) onFileAccess(hashPath, "r");
 
     if (error.size() > 0) {
         std::cerr << "ERROR: " << error << std::endl;
@@ -708,7 +754,7 @@ Coordinator::HashStatus Coordinator::checkHash(const FQName& fqName) const {
         return HashStatus::UNFROZEN;
     }
 
-    std::string currentHash = Hash::getHash(ast->getFilename()).hexString();
+    std::string currentHash = ast->getFileHash()->hexString();
 
     if (std::find(frozen.begin(), frozen.end(), currentHash) == frozen.end()) {
         std::cerr << "ERROR: " << fqName.string() << " has hash " << currentHash

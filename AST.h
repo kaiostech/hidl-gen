@@ -19,6 +19,7 @@
 #define AST_H_
 
 #include <android-base/macros.h>
+#include <hidl-hash/Hash.h>
 #include <hidl-util/FQName.h>
 #include <functional>
 #include <map>
@@ -44,7 +45,7 @@ struct NamedReference;
 struct Type;
 
 struct AST {
-    AST(const Coordinator *coordinator, const std::string &path);
+    AST(const Coordinator* coordinator, const Hash* fileHash);
 
     bool setPackage(const char *package);
     bool addImport(const char *import);
@@ -59,7 +60,8 @@ struct AST {
 
     void addScopedType(NamedType* type, Scope* scope);
 
-    const std::string &getFilename() const;
+    const std::string& getFilename() const;
+    const Hash* getFileHash() const;
 
     // Look up local identifier.
     // It could be plain identifier or enum value as described by lookupEnumValue.
@@ -117,33 +119,30 @@ struct AST {
 
     status_t gatherReferencedTypes();
 
-    status_t generateCpp(const std::string &outputPath) const;
-    status_t generateCppHeaders(const std::string &outputPath) const;
-    status_t generateCppSources(const std::string &outputPath) const;
+    status_t generateCppSource(Formatter& out) const;
 
-    status_t generateCppImpl(const std::string &outputPath) const;
-    status_t generateCppImplHeader(const std::string& outputPath) const;
-    status_t generateCppImplSource(const std::string& outputPath) const;
+    status_t generateInterfaceHeader(Formatter& out) const;
+    status_t generateHwBinderHeader(Formatter& out) const;
+    status_t generateStubHeader(Formatter& out) const;
+    status_t generateProxyHeader(Formatter& out) const;
+    status_t generatePassthroughHeader(Formatter& out) const;
 
-    status_t generateCppAdapter(const std::string& outputPath) const;
-    status_t generateCppAdapterHeader(const std::string& outputPath) const;
-    status_t generateCppAdapterSource(const std::string& outputPath) const;
+    status_t generateCppImplHeader(Formatter& out) const;
+    status_t generateCppImplSource(Formatter& out) const;
 
-    status_t generateJava(
-            const std::string &outputPath,
-            const std::string &limitToType) const;
+    status_t generateCppAdapterHeader(Formatter& out) const;
+    status_t generateCppAdapterSource(Formatter& out) const;
 
-    status_t generateJavaTypes(
-            const std::string &outputPath,
-            const std::string &limitToType) const;
+    status_t generateJava(Formatter& out, const std::string& limitToType) const;
+    status_t generateJavaTypes(Formatter& out, const std::string& limitToType) const;
+
+    status_t generateVts(Formatter& out) const;
 
     void getImportedPackages(std::set<FQName> *importSet) const;
 
     // Run getImportedPackages on this, then run getImportedPackages on
     // each AST in each package referenced in importSet.
     void getImportedPackagesHierarchy(std::set<FQName> *importSet) const;
-
-    status_t generateVts(const std::string &outputPath) const;
 
     bool isJavaCompatible() const;
 
@@ -196,8 +195,8 @@ struct AST {
     void addToImportedNamesGranular(const FQName &fqName);
 
    private:
-    const Coordinator *mCoordinator;
-    std::string mPath;
+    const Coordinator* mCoordinator;
+    const Hash* mFileHash;
 
     RootScope mRootScope;
 
@@ -252,12 +251,6 @@ struct AST {
     void enterLeaveNamespace(Formatter &out, bool enter) const;
 
     static void generateCheckNonNull(Formatter &out, const std::string &nonNull);
-
-    status_t generateInterfaceHeader(const std::string &outputPath) const;
-    status_t generateHwBinderHeader(const std::string &outputPath) const;
-    status_t generateStubHeader(const std::string &outputPath) const;
-    status_t generateProxyHeader(const std::string &outputPath) const;
-    status_t generatePassthroughHeader(const std::string &outputPath) const;
 
     status_t generateTypeSource(
             Formatter &out, const std::string &ifaceName) const;

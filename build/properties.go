@@ -25,12 +25,13 @@ type fileGroupProperties struct {
 }
 
 type genruleProperties struct {
-	Name  *string
-	Owner *string
-	Tools []string
-	Cmd   *string
-	Srcs  []string
-	Out   []string
+	Name    *string
+	Owner   *string
+	Tools   []string
+	Cmd     *string
+	Srcs    []string
+	Out     []string
+	Depfile *bool
 }
 
 type ccProperties struct {
@@ -54,6 +55,7 @@ type javaProperties struct {
 	Owner             *string
 	Defaults          []string
 	No_framework_libs *bool
+	Sdk_version       *string
 	Srcs              []string
 	Libs              []string
 }

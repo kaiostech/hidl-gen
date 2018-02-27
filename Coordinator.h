@@ -37,9 +37,12 @@ struct Coordinator {
 
     const std::string& getRootPath() const;
     void setRootPath(const std::string &rootPath);
+    void setOutputPath(const std::string& outputPath);
 
     void setVerbose(bool value);
     bool isVerbose() const;
+
+    void setDepFile(const std::string& depFile);
 
     const std::string& getOwner() const;
     void setOwner(const std::string& owner);
@@ -50,20 +53,23 @@ struct Coordinator {
     void addDefaultPackagePath(const std::string& root, const std::string& path);
 
     enum class Location {
-        DIRECT,         // outputPath + file name
-        PACKAGE_ROOT,   // e.x. hal or other files within package root
-        GEN_OUTPUT,     // e.x. android/hardware/foo/1.0/*.cpp
-        GEN_SANITIZED,  // e.x. android/hardware/foo/V1_0/*.cpp
+        STANDARD_OUT,
+        DIRECT,         // mOutputPath + file name
+        PACKAGE_ROOT,   // e.x. mRootPath + /nfc/1.0/Android.bp
+        GEN_OUTPUT,     // e.x. mOutputPath + /android/hardware/foo/1.0/*.cpp
+        GEN_SANITIZED,  // e.x. mOutputPath + /android/hardware/foo/V1_0/*.cpp
     };
 
-    std::string getFilepath(const std::string& outputPath, const FQName& fqName, Location location,
+    std::string getFilepath(const FQName& fqName, Location location,
                             const std::string& fileName = "") const;
 
-    Formatter getFormatter(const std::string& outputPath, const FQName& fqName, Location location,
+    Formatter getFormatter(const FQName& fqName, Location location,
                            const std::string& fileName) const;
 
     // must be called before file access
     void onFileAccess(const std::string& path, const std::string& mode) const;
+
+    status_t writeDepFile(const std::string& forFile) const;
 
     enum class Enforce {
         FULL,     // default
@@ -112,7 +118,7 @@ struct Coordinator {
     // Returns types which are imported/defined but not referenced in code
     status_t addUnreferencedTypes(const std::vector<FQName>& packageInterfaces,
                                   std::set<FQName>* unreferencedDefinitions,
-                                  std::set<FQName>* unreferencedImports);
+                                  std::set<FQName>* unreferencedImports) const;
 
     // Enforce a set of restrictions on a set of packages. These include:
     //    - minor version upgrades
@@ -153,10 +159,12 @@ private:
     std::string convertPackageRootToPath(const FQName& fqName) const;
 
     std::vector<PackageRoot> mPackageRoots;
-    std::string mRootPath;
+    std::string mRootPath;    // root of android source tree (to locate package roots)
+    std::string mOutputPath;  // root of output directory
+    std::string mDepFile;     // location to write depfile
 
     // hidl-gen options
-    bool mVerbose;
+    bool mVerbose = false;
     std::string mOwner;
 
     // cache to parse().
@@ -164,6 +172,8 @@ private:
 
     // cache to enforceRestrictionsOnPackage().
     mutable std::set<FQName> mPackagesEnforced;
+
+    mutable std::set<std::string> mReadFiles;
 
     // Returns the given path if it is absolute, otherwise it returns
     // the path relative to mRootPath

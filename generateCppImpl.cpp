@@ -33,16 +33,6 @@
 
 namespace android {
 
-status_t AST::generateCppImpl(const std::string &outputPath) const {
-    status_t err = generateCppImplHeader(outputPath);
-
-    if (err == OK) {
-        err = generateCppImplSource(outputPath);
-    }
-
-    return err;
-}
-
 void AST::generateFetchSymbol(Formatter &out, const std::string& ifaceName) const {
     out << "HIDL_FETCH_" << ifaceName;
 }
@@ -80,7 +70,7 @@ status_t AST::generateStubImplMethod(Formatter &out,
     return OK;
 }
 
-status_t AST::generateCppImplHeader(const std::string& outputPath) const {
+status_t AST::generateCppImplHeader(Formatter& out) const {
     if (!AST::isInterface()) {
         // types.hal does not get a stub header.
         return OK;
@@ -88,13 +78,6 @@ status_t AST::generateCppImplHeader(const std::string& outputPath) const {
 
     const Interface* iface = mRootScope.getInterface();
     const std::string baseName = iface->getBaseName();
-
-    Formatter out = mCoordinator->getFormatter(outputPath, mPackage, Coordinator::Location::DIRECT,
-                                               baseName + ".h");
-
-    if (!out.isValid()) {
-        return UNKNOWN_ERROR;
-    }
 
     const std::string guard = makeHeaderGuard(baseName, false /* indicateGenerated */);
 
@@ -161,7 +144,7 @@ status_t AST::generateCppImplHeader(const std::string& outputPath) const {
     return OK;
 }
 
-status_t AST::generateCppImplSource(const std::string& outputPath) const {
+status_t AST::generateCppImplSource(Formatter& out) const {
     if (!AST::isInterface()) {
         // types.hal does not get a stub header.
         return OK;
@@ -169,13 +152,6 @@ status_t AST::generateCppImplSource(const std::string& outputPath) const {
 
     const Interface* iface = mRootScope.getInterface();
     const std::string baseName = iface->getBaseName();
-
-    Formatter out = mCoordinator->getFormatter(outputPath, mPackage, Coordinator::Location::DIRECT,
-                                               baseName + ".cpp");
-
-    if (!out.isValid()) {
-        return UNKNOWN_ERROR;
-    }
 
     out << "#include \"" << baseName << ".h\"\n\n";
 
