@@ -29,8 +29,7 @@
 
 #include "AST.h"
 #include "Interface.h"
-
-extern android::status_t parseFile(android::AST *ast);
+#include "hidl-gen_l.h"
 
 static bool existdir(const char *name) {
     DIR *dir = opendir(name);
@@ -106,7 +105,11 @@ Formatter Coordinator::getFormatter(const FQName& fqName, Location location,
         return Formatter(stdout);
     }
 
-    std::string filepath = getFilepath(fqName, location, fileName);
+    std::string filepath;
+    status_t err = getFilepath(fqName, location, fileName, &filepath);
+    if (err != OK) {
+        return Formatter::invalid();
+    }
 
     onFileAccess(filepath, "w");
 
@@ -125,29 +128,42 @@ Formatter Coordinator::getFormatter(const FQName& fqName, Location location,
     return Formatter(file);
 }
 
-std::string Coordinator::getFilepath(const FQName& fqName, Location location,
-                                     const std::string& fileName) const {
-    std::string path = mOutputPath;
+status_t Coordinator::getFilepath(const FQName& fqName, Location location,
+                                  const std::string& fileName, std::string* path) const {
+    status_t err;
+    std::string packagePath;
+    std::string packageRootPath;
 
     switch (location) {
         case Location::DIRECT: { /* nothing */
+            *path = mOutputPath + fileName;
         } break;
         case Location::PACKAGE_ROOT: {
-            path.append(getPackagePath(fqName, false /* relative */));
+            err = getPackagePath(fqName, false /* relative */, false /* sanitized */, &packagePath);
+            if (err != OK) return err;
+
+            *path = mOutputPath + packagePath + fileName;
         } break;
         case Location::GEN_OUTPUT: {
-            path.append(convertPackageRootToPath(fqName));
-            path.append(getPackagePath(fqName, true /* relative */, false /* sanitized */));
+            err = convertPackageRootToPath(fqName, &packageRootPath);
+            if (err != OK) return err;
+            err = getPackagePath(fqName, true /* relative */, false /* sanitized */, &packagePath);
+            if (err != OK) return err;
+
+            *path = mOutputPath + packageRootPath + packagePath + fileName;
         } break;
         case Location::GEN_SANITIZED: {
-            path.append(convertPackageRootToPath(fqName));
-            path.append(getPackagePath(fqName, true /* relative */, true /* sanitized */));
+            err = convertPackageRootToPath(fqName, &packageRootPath);
+            if (err != OK) return err;
+            err = getPackagePath(fqName, true /* relative */, true /* sanitized */, &packagePath);
+            if (err != OK) return err;
+
+            *path = mOutputPath + packageRootPath + packagePath + fileName;
         } break;
         default: { CHECK(false) << "Invalid location: " << static_cast<size_t>(location); }
     }
 
-    path.append(fileName);
-    return path;
+    return OK;
 }
 
 void Coordinator::onFileAccess(const std::string& path, const std::string& mode) const {
@@ -192,17 +208,34 @@ status_t Coordinator::writeDepFile(const std::string& forFile) const {
 
 AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
                         Enforce enforcement) const {
+    AST* ret;
+    status_t err = parseOptional(fqName, &ret, parsedASTs, enforcement);
+    if (err != OK) CHECK(ret == nullptr);  // internal consistency
+
+    // only in a handful of places do we want to distinguish between
+    // a missing file and a bad AST. Everywhere else, we just want to
+    // throw an error if we expect an AST to be present but it is not.
+    return ret;
+}
+
+status_t Coordinator::parseOptional(const FQName& fqName, AST** ast, std::set<AST*>* parsedASTs,
+                                    Enforce enforcement) const {
     CHECK(fqName.isFullyQualified());
 
     auto it = mCache.find(fqName);
     if (it != mCache.end()) {
-        AST *ast = (*it).second;
+        *ast = (*it).second;
 
-        if (ast != nullptr && parsedASTs != nullptr) {
-            parsedASTs->insert(ast);
+        if (*ast != nullptr && parsedASTs != nullptr) {
+            parsedASTs->insert(*ast);
         }
 
-        return ast;
+        if (*ast == nullptr) {
+            // circular import OR that AST has errors in it
+            return UNKNOWN_ERROR;
+        }
+
+        return OK;
     }
 
     // Add this to the cache immediately, so we can discover circular imports.
@@ -214,36 +247,47 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
         // Any interface file implicitly imports its package's types.hal.
         FQName typesName = fqName.getTypesForPackage();
         // Do not enforce on imports. Do not add imports' imports to this AST.
-        typesAST = parse(typesName, nullptr, Enforce::NONE);
+        status_t err = parseOptional(typesName, &typesAST, nullptr, Enforce::NONE);
+        if (err != OK) return err;
 
         // fall through.
     }
 
-    std::string path = makeAbsolute(getPackagePath(fqName));
+    std::string packagePath;
+    status_t err =
+        getPackagePath(fqName, false /* relative */, false /* sanitized */, &packagePath);
+    if (err != OK) return err;
 
-    path.append(fqName.name());
-    path.append(".hal");
+    const std::string path = makeAbsolute(packagePath + fqName.name() + ".hal");
 
-    AST* ast = new AST(this, &Hash::getHash(path));
+    *ast = new AST(this, &Hash::getHash(path));
 
     if (typesAST != NULL) {
         // If types.hal for this AST's package existed, make it's defined
         // types available to the (about to be parsed) AST right away.
-        ast->addImportedAST(typesAST);
+        (*ast)->addImportedAST(typesAST);
     }
 
-    if (parseFile(ast) != OK || ast->postParse() != OK) {
-        delete ast;
-        ast = nullptr;
+    std::unique_ptr<FILE, std::function<void(FILE*)>> file(fopen(path.c_str(), "rb"), fclose);
 
-        return nullptr;
+    if (file == nullptr) {
+        mCache.erase(fqName);  // nullptr in cache is used to find circular imports
+        delete *ast;
+        *ast = nullptr;
+        return OK;  // File does not exist, nullptr AST* == file doesn't exist.
     }
 
     onFileAccess(path, "r");
 
-    status_t err = OK;
-    if (ast->package().package() != fqName.package()
-            || ast->package().version() != fqName.version()) {
+    // parse file takes ownership of file
+    if (parseFile(*ast, std::move(file)) != OK || (*ast)->postParse() != OK) {
+        delete *ast;
+        *ast = nullptr;
+        return UNKNOWN_ERROR;
+    }
+
+    if ((*ast)->package().package() != fqName.package() ||
+        (*ast)->package().version() != fqName.version()) {
         fprintf(stderr,
                 "ERROR: File at '%s' does not match expected package and/or "
                 "version.\n",
@@ -251,16 +295,15 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
 
         err = UNKNOWN_ERROR;
     } else {
-        if (ast->isInterface()) {
+        if ((*ast)->isInterface()) {
             if (fqName.name() == "types") {
                 fprintf(stderr,
                         "ERROR: File at '%s' declares an interface '%s' "
                         "instead of the expected types common to the package.\n",
-                        path.c_str(),
-                        ast->getInterface()->localName().c_str());
+                        path.c_str(), (*ast)->getInterface()->localName().c_str());
 
                 err = UNKNOWN_ERROR;
-            } else if (ast->getInterface()->localName() != fqName.name()) {
+            } else if ((*ast)->getInterface()->localName() != fqName.name()) {
                 fprintf(stderr,
                         "ERROR: File at '%s' does not declare interface type "
                         "'%s'.\n",
@@ -277,7 +320,7 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
                     fqName.name().c_str());
 
             err = UNKNOWN_ERROR;
-        } else if (ast->containsInterfaces()) {
+        } else if ((*ast)->containsInterfaces()) {
             fprintf(stderr,
                     "ERROR: types.hal file at '%s' declares at least one "
                     "interface type.\n",
@@ -288,31 +331,32 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
     }
 
     if (err != OK) {
-        delete ast;
-        ast = nullptr;
-
-        return nullptr;
+        delete *ast;
+        *ast = nullptr;
+        return err;
     }
 
-    if (parsedASTs != nullptr) { parsedASTs->insert(ast); }
+    if (parsedASTs != nullptr) {
+        parsedASTs->insert(*ast);
+    }
 
     // put it into the cache now, so that enforceRestrictionsOnPackage can
     // parse fqName.
-    mCache[fqName] = ast;
+    mCache[fqName] = *ast;
 
     // For each .hal file that hidl-gen parses, the whole package will be checked.
     err = enforceRestrictionsOnPackage(fqName, enforcement);
     if (err != OK) {
         mCache[fqName] = nullptr;
-        delete ast;
-        ast = nullptr;
-        return nullptr;
+        delete *ast;
+        *ast = nullptr;
+        return err;
     }
 
-    return ast;
+    return OK;
 }
 
-const Coordinator::PackageRoot &Coordinator::findPackageRoot(const FQName &fqName) const {
+const Coordinator::PackageRoot* Coordinator::findPackageRoot(const FQName& fqName) const {
     CHECK(!fqName.package().empty());
 
     // Find the right package prefix and path for this FQName.  For
@@ -328,17 +372,21 @@ const Coordinator::PackageRoot &Coordinator::findPackageRoot(const FQName &fqNam
             continue;
         }
 
-        CHECK(ret == mPackageRoots.end())
-            << "Multiple package roots found for "<< fqName.string()
-            << " (" << it->root.package() << " and "
-            << ret->root.package() << ")";
+        if (ret != mPackageRoots.end()) {
+            std::cerr << "ERROR: Multiple package roots found for " << fqName.string() << " ("
+                      << it->root.package() << " and " << ret->root.package() << ")\n";
+            return nullptr;
+        }
 
         ret = it;
     }
-    CHECK(ret != mPackageRoots.end())
-        << "Unable to find package root for " << fqName.string();
 
-    return *ret;
+    if (ret == mPackageRoots.end()) {
+        std::cerr << "ERROR: Package root not specified for " << fqName.string() << "\n";
+        return nullptr;
+    }
+
+    return &(*ret);
 }
 
 std::string Coordinator::makeAbsolute(const std::string& path) const {
@@ -349,26 +397,32 @@ std::string Coordinator::makeAbsolute(const std::string& path) const {
     return mRootPath + path;
 }
 
-std::string Coordinator::getPackageRoot(const FQName &fqName) const {
-    return findPackageRoot(fqName).root.package();
+status_t Coordinator::getPackageRoot(const FQName& fqName, std::string* root) const {
+    const PackageRoot* packageRoot = findPackageRoot(fqName);
+    if (root == nullptr) {
+        return UNKNOWN_ERROR;
+    }
+    *root = packageRoot->root.package();
+    return OK;
 }
 
-std::string Coordinator::getPackageRootPath(const FQName &fqName) const {
-    return findPackageRoot(fqName).path;
+status_t Coordinator::getPackageRootPath(const FQName& fqName, std::string* path) const {
+    const PackageRoot* packageRoot = findPackageRoot(fqName);
+    if (packageRoot == nullptr) {
+        return UNKNOWN_ERROR;
+    }
+    *path = packageRoot->path;
+    return OK;
 }
 
-std::string Coordinator::getPackageRootOption(const FQName &fqName) const {
-    return getPackageRoot(fqName) + ":" + getPackageRootPath(fqName);
-}
-
-std::string Coordinator::getPackagePath(
-        const FQName& fqName, bool relative, bool sanitized) const {
-
-    const PackageRoot& packageRoot = findPackageRoot(fqName);
+status_t Coordinator::getPackagePath(const FQName& fqName, bool relative, bool sanitized,
+                                     std::string* path) const {
+    const PackageRoot* packageRoot = findPackageRoot(fqName);
+    if (packageRoot == nullptr) return UNKNOWN_ERROR;
 
     // Given FQName of "android.hardware.nfc.test@1.0::IFoo" and a prefix
     // "android.hardware", the suffix is "nfc.test".
-    std::string suffix = StringHelper::LTrim(fqName.package(), packageRoot.root.package());
+    std::string suffix = StringHelper::LTrim(fqName.package(), packageRoot->root.package());
     suffix = StringHelper::LTrim(suffix, ".");
 
     std::vector<std::string> suffixComponents;
@@ -376,12 +430,13 @@ std::string Coordinator::getPackagePath(
 
     std::vector<std::string> components;
     if (!relative) {
-        components.push_back(StringHelper::RTrimAll(packageRoot.path, "/"));
+        components.push_back(StringHelper::RTrimAll(packageRoot->path, "/"));
     }
     components.insert(components.end(), suffixComponents.begin(), suffixComponents.end());
     components.push_back(sanitized ? fqName.sanitizedVersion() : fqName.version());
 
-    return StringHelper::JoinStrings(components, "/") + "/";
+    *path = StringHelper::JoinStrings(components, "/") + "/";
+    return OK;
 }
 
 status_t Coordinator::getPackageInterfaceFiles(
@@ -389,16 +444,17 @@ status_t Coordinator::getPackageInterfaceFiles(
         std::vector<std::string> *fileNames) const {
     fileNames->clear();
 
-    const std::string packagePath = makeAbsolute(getPackagePath(package));
+    std::string packagePath;
+    status_t err =
+        getPackagePath(package, false /* relative */, false /* sanitized */, &packagePath);
+    if (err != OK) return err;
 
-    DIR *dir = opendir(packagePath.c_str());
+    const std::string path = makeAbsolute(packagePath);
+    DIR* dir = opendir(path.c_str());
 
     if (dir == NULL) {
-        fprintf(stderr,
-                "ERROR: Could not open package path %s for package %s:\n%s\n",
-                getPackagePath(package).c_str(),
-                package.string().c_str(),
-                packagePath.c_str());
+        fprintf(stderr, "ERROR: Could not open package path %s for package %s:\n%s\n",
+                packagePath.c_str(), package.string().c_str(), path.c_str());
         return -errno;
     }
 
@@ -466,8 +522,10 @@ status_t Coordinator::appendPackageInterfacesToVector(
     return OK;
 }
 
-std::string Coordinator::convertPackageRootToPath(const FQName &fqName) const {
-    std::string packageRoot = getPackageRoot(fqName);
+status_t Coordinator::convertPackageRootToPath(const FQName& fqName, std::string* path) const {
+    std::string packageRoot;
+    status_t err = getPackageRoot(fqName, &packageRoot);
+    if (err != OK) return err;
 
     if (*(packageRoot.end()--) != '.') {
         packageRoot += '.';
@@ -475,7 +533,8 @@ std::string Coordinator::convertPackageRootToPath(const FQName &fqName) const {
 
     std::replace(packageRoot.begin(), packageRoot.end(), '.', '/');
 
-    return packageRoot; // now converted to a path
+    *path = packageRoot;  // now converted to a path
+    return OK;
 }
 
 status_t Coordinator::isTypesOnlyPackage(const FQName& package, bool* result) const {
@@ -613,8 +672,13 @@ status_t Coordinator::enforceMinorVersionUprevs(const FQName &currentPackage) co
     FQName prevPackage = currentPackage;
     while (prevPackage.getPackageMinorVersion() > 0) {
         prevPackage = prevPackage.downRev();
-        const std::string prevPackagePath = makeAbsolute(getPackagePath(prevPackage));
-        if (existdir(prevPackagePath.c_str())) {
+
+        std::string prevPackagePath;
+        status_t err = getPackagePath(prevPackage, false /* relative */, false /* sanitized */,
+                                      &prevPackagePath);
+        if (err != OK) return err;
+
+        if (existdir(makeAbsolute(prevPackagePath).c_str())) {
             hasPrevPackage = true;
             break;
         }
@@ -734,7 +798,11 @@ Coordinator::HashStatus Coordinator::checkHash(const FQName& fqName) const {
     AST* ast = parse(fqName);
     if (ast == nullptr) return HashStatus::ERROR;
 
-    std::string hashPath = makeAbsolute(getPackageRootPath(fqName)) + "/current.txt";
+    std::string rootPath;
+    status_t err = getPackageRootPath(fqName, &rootPath);
+    if (err != OK) return HashStatus::ERROR;
+
+    std::string hashPath = makeAbsolute(rootPath) + "/current.txt";
     std::string error;
     bool fileExists;
     std::vector<std::string> frozen =

@@ -73,8 +73,6 @@ type hidlInterface struct {
 	properties hidlInterfaceProperties
 }
 
-var _ genrule.SourceFileGenerator = (*hidlInterface)(nil)
-
 func processSources(mctx android.LoadHookContext, srcs []string) ([]string, []string, bool) {
 	var interfaces []string
 	var types []string // hidl-gen only supports types.hal, but don't assume that here
@@ -324,7 +322,7 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
 			Srcs:              []string{":" + name.javaSourcesName()},
-			Libs:              javaDependencies,
+			Static_libs:       append(javaDependencies, "hwbinder"),
 		})
 	}
 
@@ -431,12 +429,6 @@ func (h *hidlInterface) Name() string {
 func (h *hidlInterface) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 func (h *hidlInterface) DepsMutator(ctx android.BottomUpMutatorContext) {
-}
-func (h *hidlInterface) GeneratedHeaderDirs() android.Paths {
-	return []android.Path{}
-}
-func (h *hidlInterface) GeneratedSourceFiles() android.Paths {
-	return []android.Path{}
 }
 
 var hidlInterfaceMutex sync.Mutex

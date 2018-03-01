@@ -61,29 +61,32 @@ struct FileGenerator {
         return mFileNameForFqName ? mFileNameForFqName(fqName) : "";
     }
 
-    std::string getOutputFile(const FQName& fqName, const Coordinator* coordinator,
-                              Coordinator::Location location) const {
+    status_t getOutputFile(const FQName& fqName, const Coordinator* coordinator,
+                           Coordinator::Location location, std::string* file) const {
         if (!mShouldGenerateForFqName(fqName)) {
-            return "";
+            return OK;
         }
 
-        return coordinator->getFilepath(fqName, location, getFileName(fqName));
+        return coordinator->getFilepath(fqName, location, getFileName(fqName), file);
     }
 
-    void appendOutputFiles(const FQName& fqName, const Coordinator* coordinator,
-                           Coordinator::Location location,
-                           std::vector<std::string>* outputFiles) const {
+    status_t appendOutputFiles(const FQName& fqName, const Coordinator* coordinator,
+                               Coordinator::Location location,
+                               std::vector<std::string>* outputFiles) const {
         if (location == Coordinator::Location::STANDARD_OUT) {
-            return;
+            return OK;
         }
 
         if (mShouldGenerateForFqName(fqName)) {
-            const std::string fileName = getOutputFile(fqName, coordinator, location);
+            std::string fileName;
+            status_t err = getOutputFile(fqName, coordinator, location, &fileName);
+            if (err != OK) return err;
 
             if (!fileName.empty()) {
                 outputFiles->push_back(fileName);
             }
         }
+        return OK;
     }
 
     status_t generate(const FQName& fqName, const Coordinator* coordinator,
@@ -96,6 +99,10 @@ struct FileGenerator {
         }
 
         Formatter out = coordinator->getFormatter(fqName, location, getFileName(fqName));
+        if (!out.isValid()) {
+            return UNKNOWN_ERROR;
+        }
+
         return mGenerationFunction(out, fqName, coordinator);
     }
 
@@ -110,8 +117,8 @@ struct FileGenerator {
 
 // Represents a -L option, takes a fqName and generates files
 struct OutputHandler {
-    using ValidationFunction =
-        std::function<bool(const FQName& fqName, const std::string& language)>;
+    using ValidationFunction = std::function<bool(
+        const FQName& fqName, const Coordinator* coordinator, const std::string& language)>;
 
     std::string mKey;                 // -L in Android.bp
     std::string mDescription;         // for display in help menu
@@ -125,8 +132,9 @@ struct OutputHandler {
     const std::string& description() const { return mDescription; }
 
     status_t generate(const FQName& fqName, const Coordinator* coordinator) const;
-    status_t validate(const FQName& fqName, const std::string& language) const {
-        return mValidate(fqName, language);
+    status_t validate(const FQName& fqName, const Coordinator* coordinator,
+                      const std::string& language) const {
+        return mValidate(fqName, coordinator, language);
     }
 
     status_t writeDepFile(const FQName& fqName, const Coordinator* coordinator) const;
@@ -222,7 +230,8 @@ status_t OutputHandler::appendOutputFiles(const FQName& fqName, const Coordinato
 
     for (const FQName& fqName : targets) {
         for (const FileGenerator& file : mGenerateFunctions) {
-            file.appendOutputFiles(fqName, coordinator, mLocation, outputFiles);
+            err = file.appendOutputFiles(fqName, coordinator, mLocation, outputFiles);
+            if (err != OK) return err;
         }
     }
 
@@ -247,7 +256,7 @@ status_t OutputHandler::writeDepFile(const FQName& fqName, const Coordinator* co
 }
 
 // Use an AST function as a OutputHandler GenerationFunction
-static FileGenerator::GenerationFunction astGenerationFunction(status_t (AST::*generate)(Formatter&)
+static FileGenerator::GenerationFunction astGenerationFunction(void (AST::*generate)(Formatter&)
                                                                    const = nullptr) {
     return [generate](Formatter& out, const FQName& fqName,
                       const Coordinator* coordinator) -> status_t {
@@ -258,7 +267,9 @@ static FileGenerator::GenerationFunction astGenerationFunction(status_t (AST::*g
         }
 
         if (generate == nullptr) return OK;  // just parsing AST
-        return (ast->*generate)(out);
+        (ast->*generate)(out);
+
+        return OK;
     };
 }
 
@@ -289,7 +300,8 @@ static status_t generateJavaForPackage(Formatter& out, const FQName& fqName,
         fprintf(stderr, "ERROR: Could not parse %s. Aborting.\n", fqName.string().c_str());
         return UNKNOWN_ERROR;
     }
-    return ast->generateJava(out, limitToType);
+    ast->generateJava(out, limitToType);
+    return OK;
 };
 
 static status_t dumpDefinedButUnreferencedTypeNames(const FQName& packageFQName,
@@ -414,8 +426,8 @@ static bool packageNeedsJavaCode(
     return false;
 }
 
-bool validateIsPackage(
-        const FQName &fqName, const std::string & /* language */) {
+bool validateIsPackage(const FQName& fqName, const Coordinator*,
+                       const std::string& /* language */) {
     if (fqName.package().empty()) {
         fprintf(stderr, "ERROR: Expecting package name\n");
         return false;
@@ -460,21 +472,25 @@ bool isSystemPackage(const FQName &package) {
 }
 
 // TODO(b/69862859): remove special case
-bool isTestPackage(const FQName& fqName, const Coordinator* coordinator) {
+status_t isTestPackage(const FQName& fqName, const Coordinator* coordinator, bool* isTestPackage) {
     const auto fileExists = [](const std::string& file) {
         struct stat buf;
         return stat(file.c_str(), &buf) == 0;
     };
 
-    const std::string path =
-        coordinator->getFilepath(fqName, Coordinator::Location::PACKAGE_ROOT, ".hidl_for_test");
+    std::string path;
+    status_t err = coordinator->getFilepath(fqName, Coordinator::Location::PACKAGE_ROOT,
+                                            ".hidl_for_test", &path);
+    if (err != OK) return err;
+
     const bool exists = fileExists(path);
 
     if (exists) {
         coordinator->onFileAccess(path, "r");
     }
 
-    return exists;
+    *isTestPackage = exists;
+    return OK;
 }
 
 static status_t generateAdapterMainSource(Formatter& out, const FQName& packageFQName,
@@ -559,9 +575,16 @@ static status_t generateAndroidBpForPackage(Formatter& out, const FQName& packag
     if (err != OK) return err;
     bool genJavaLibrary = needsJavaCode && isJavaCompatible;
 
-    bool generateForTest = isTestPackage(packageFQName, coordinator);
+    bool generateForTest;
+    err = isTestPackage(packageFQName, coordinator, &generateForTest);
+    if (err != OK) return err;
+
     bool isVndk = !generateForTest && isSystemPackage(packageFQName);
     bool isVndkSp = isVndk && isSystemProcessSupportedPackage(packageFQName);
+
+    std::string packageRoot;
+    err = coordinator->getPackageRoot(packageFQName, &packageRoot);
+    if (err != OK) return err;
 
     out << "// This file is autogenerated by hidl-gen -Landroidbp.\n\n";
 
@@ -571,7 +594,7 @@ static status_t generateAndroidBpForPackage(Formatter& out, const FQName& packag
         if (!coordinator->getOwner().empty()) {
             out << "owner: \"" << coordinator->getOwner() << "\",\n";
         }
-        out << "root: \"" << coordinator->getPackageRoot(packageFQName) << "\",\n";
+        out << "root: \"" << packageRoot << "\",\n";
         if (isHidlTransportPackage(packageFQName)) {
             out << "core_interface: true,\n";
         }
@@ -708,8 +731,8 @@ static status_t generateAndroidBpImplForPackage(Formatter& out, const FQName& pa
     return OK;
 }
 
-bool validateForSource(
-        const FQName &fqName, const std::string &language) {
+bool validateForSource(const FQName& fqName, const Coordinator* coordinator,
+                       const std::string& language) {
     if (fqName.package().empty()) {
         fprintf(stderr, "ERROR: Expecting package name\n");
         return false;
@@ -737,6 +760,23 @@ bool validateForSource(
         }
 
         return true;
+    }
+
+    if (language == "java") {
+        bool isJavaCompatible;
+        status_t err = isPackageJavaCompatible(fqName, coordinator, &isJavaCompatible);
+        if (err != OK) return false;
+
+        if (!isJavaCompatible) {
+            fprintf(stderr,
+                    "ERROR: %s is not Java compatible. The Java backend"
+                    " does NOT support union types nor native handles. "
+                    "In addition, vectors of arrays are limited to at most "
+                    "one-dimensional arrays and vectors of {vectors,interfaces} are"
+                    " not supported.\n",
+                    fqName.string().c_str());
+            return false;
+        }
     }
 
     return true;
@@ -783,9 +823,14 @@ FileGenerator::GenerationFunction generateExportHeaderForPackage(bool forJava) {
             return UNKNOWN_ERROR;
         }
 
+        std::string packagePath;
+        err = coordinator->getPackagePath(packageFQName, false /* relative */,
+                                          false /* sanitized */, &packagePath);
+        if (err != OK) return err;
+
         out << "// This file is autogenerated by hidl-gen. Do not edit manually.\n"
             << "// Source: " << packageFQName.string() << "\n"
-            << "// Root: " << coordinator->getPackageRootOption(packageFQName) << "\n\n";
+            << "// Location: " << packagePath << "\n\n";
 
         std::string guard;
         if (forJava) {
@@ -1090,7 +1135,7 @@ static const std::vector<OutputHandler> kFormats = {
         OutputMode::NEEDS_SRC,
         Coordinator::Location::PACKAGE_ROOT,
         GenerationGranularity::PER_PACKAGE,
-        [](const FQName &, const std::string &) {
+        [](const FQName &, const Coordinator*, const std::string &) {
            fprintf(stderr, "ERROR: makefile output is not supported. Use -Landroidbp for all build file generation.\n");
            return false;
         },
@@ -1135,8 +1180,11 @@ static const std::vector<OutputHandler> kFormats = {
 static void usage(const char *me) {
     fprintf(stderr,
             "usage: %s [-p <root path>] -o <output path> -L <language> [-O <owner>] (-r <interface "
-            "root>)+ [-v] [-d <depfile>] fqname+\n",
+            "root>)+ [-v] [-d <depfile>] FQNAME...\n\n",
             me);
+
+    fprintf(stderr,
+            "Process FQNAME, PACKAGE(.SUBPACKAGE)*@[0-9]+.[0-9]+(::TYPE)?, to create output.\n\n");
 
     fprintf(stderr, "         -h: Prints this menu.\n");
     fprintf(stderr, "         -L <language>: The following options are available:\n");
@@ -1325,14 +1373,13 @@ int main(int argc, char **argv) {
     for (int i = 0; i < argc; ++i) {
         FQName fqName(argv[i]);
 
-        // TODO(b/65200821): remove
-        gCurrentCompileName = "_" + StringHelper::Uppercase(fqName.tokenName());
-
         if (!fqName.isValid()) {
-            fprintf(stderr,
-                    "ERROR: Invalid fully-qualified name.\n");
+            fprintf(stderr, "ERROR: Invalid fully-qualified name as argument: %s.\n", argv[i]);
             exit(1);
         }
+
+        // TODO(b/65200821): remove
+        gCurrentCompileName = "_" + StringHelper::Uppercase(fqName.tokenName());
 
         // Dump extra verbose output
         if (coordinator.isVerbose()) {
@@ -1341,7 +1388,7 @@ int main(int argc, char **argv) {
             if (err != OK) return err;
         }
 
-        if (!outputFormat->validate(fqName, outputFormat->name())) {
+        if (!outputFormat->validate(fqName, &coordinator, outputFormat->name())) {
             fprintf(stderr,
                     "ERROR: output handler failed.\n");
             exit(1);
