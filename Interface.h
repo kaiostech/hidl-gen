@@ -20,6 +20,8 @@
 
 #include <vector>
 
+#include <hidl-hash/Hash.h>
+
 #include "Reference.h"
 #include "Scope.h"
 
@@ -35,7 +37,9 @@ struct Interface : public Scope {
     };
 
     Interface(const char* localName, const FQName& fullName, const Location& location,
-              Scope* parent, const Reference<Type>& superType);
+              Scope* parent, const Reference<Type>& superType, const Hash* fileHash);
+
+    const Hash* getFileHash() const;
 
     bool addMethod(Method *method);
     bool addAllReservedMethods();
@@ -100,6 +104,7 @@ struct Interface : public Scope {
     status_t resolveInheritance() override;
     status_t validate() const override;
     status_t validateUniqueNames() const;
+    status_t validateAnnotations() const;
 
     void emitReaderWriter(
             Formatter &out,
@@ -109,8 +114,8 @@ struct Interface : public Scope {
             bool isReader,
             ErrorMode mode) const override;
 
-    status_t emitPackageTypeDeclarations(Formatter& out) const override;
-    status_t emitTypeDefinitions(Formatter& out, const std::string& prefix) const override;
+    void emitPackageTypeDeclarations(Formatter& out) const override;
+    void emitTypeDefinitions(Formatter& out, const std::string& prefix) const override;
 
     void getAlignmentAndSize(size_t* align, size_t* size) const override;
     void emitJavaReaderWriter(
@@ -119,10 +124,10 @@ struct Interface : public Scope {
             const std::string &argName,
             bool isReader) const override;
 
-    status_t emitVtsAttributeType(Formatter &out) const override;
+    void emitVtsAttributeType(Formatter& out) const override;
 
-    status_t emitVtsAttributeDeclaration(Formatter &out) const;
-    status_t emitVtsMethodDeclaration(Formatter &out) const;
+    void emitVtsAttributeDeclaration(Formatter& out) const;
+    void emitVtsMethodDeclaration(Formatter& out) const;
 
     bool hasOnewayMethods() const;
 
@@ -136,6 +141,8 @@ struct Interface : public Scope {
     std::vector<Method*> mUserMethods;
     std::vector<Method*> mReservedMethods;
 
+    const Hash* mFileHash;
+
     bool fillPingMethod(Method* method) const;
     bool fillDescriptorChainMethod(Method* method) const;
     bool fillGetDescriptorMethod(Method* method) const;
@@ -146,6 +153,10 @@ struct Interface : public Scope {
     bool fillSetHALInstrumentationMethod(Method* method) const;
     bool fillGetDebugInfoMethod(Method* method) const;
     bool fillDebugMethod(Method* method) const;
+
+    void emitDigestChain(
+        Formatter& out, const std::string& prefix, const std::vector<const Interface*>& chain,
+        std::function<std::string(std::unique_ptr<ConstantExpression>)> byteToString) const;
 
     DISALLOW_COPY_AND_ASSIGN(Interface);
 };

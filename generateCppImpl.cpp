@@ -33,27 +33,15 @@
 
 namespace android {
 
-status_t AST::generateCppImpl(const std::string &outputPath) const {
-    status_t err = generateCppImplHeader(outputPath);
-
-    if (err == OK) {
-        err = generateCppImplSource(outputPath);
-    }
-
-    return err;
-}
-
 void AST::generateFetchSymbol(Formatter &out, const std::string& ifaceName) const {
     out << "HIDL_FETCH_" << ifaceName;
 }
 
-status_t AST::generateStubImplMethod(Formatter &out,
-                                     const std::string &className,
-                                     const Method *method) const {
-
+void AST::generateStubImplMethod(Formatter& out, const std::string& className,
+                                 const Method* method) const {
     // ignore HIDL reserved methods -- implemented in IFoo already.
     if (method->isHidlReserved()) {
-        return OK;
+        return;
     }
 
     method->generateCppSignature(out, className, false /* specifyNamespaces */);
@@ -77,24 +65,17 @@ status_t AST::generateStubImplMethod(Formatter &out,
 
     out << "}\n\n";
 
-    return OK;
+    return;
 }
 
-status_t AST::generateCppImplHeader(const std::string& outputPath) const {
+void AST::generateCppImplHeader(Formatter& out) const {
     if (!AST::isInterface()) {
         // types.hal does not get a stub header.
-        return OK;
+        return;
     }
 
     const Interface* iface = mRootScope.getInterface();
     const std::string baseName = iface->getBaseName();
-
-    Formatter out = mCoordinator->getFormatter(outputPath, mPackage, Coordinator::Location::DIRECT,
-                                               baseName + ".h");
-
-    if (!out.isValid()) {
-        return UNKNOWN_ERROR;
-    }
 
     const std::string guard = makeHeaderGuard(baseName, false /* indicateGenerated */);
 
@@ -127,20 +108,15 @@ status_t AST::generateCppImplHeader(const std::string& outputPath) const {
 
     out.indent();
 
-    status_t err = generateMethods(out, [&](const Method *method, const Interface *) {
+    generateMethods(out, [&](const Method* method, const Interface*) {
         // ignore HIDL reserved methods -- implemented in IFoo already.
         if (method->isHidlReserved()) {
-            return OK;
+            return;
         }
         method->generateCppSignature(out, "" /* className */,
                 false /* specifyNamespaces */);
         out << " override;\n";
-        return OK;
     });
-
-    if (err != OK) {
-        return err;
-    }
 
     out.unindent();
 
@@ -157,38 +133,25 @@ status_t AST::generateCppImplHeader(const std::string& outputPath) const {
     enterLeaveNamespace(out, false /* leave */);
 
     out << "\n#endif  // " << guard << "\n";
-
-    return OK;
 }
 
-status_t AST::generateCppImplSource(const std::string& outputPath) const {
+void AST::generateCppImplSource(Formatter& out) const {
     if (!AST::isInterface()) {
         // types.hal does not get a stub header.
-        return OK;
+        return;
     }
 
     const Interface* iface = mRootScope.getInterface();
     const std::string baseName = iface->getBaseName();
-
-    Formatter out = mCoordinator->getFormatter(outputPath, mPackage, Coordinator::Location::DIRECT,
-                                               baseName + ".cpp");
-
-    if (!out.isValid()) {
-        return UNKNOWN_ERROR;
-    }
 
     out << "#include \"" << baseName << ".h\"\n\n";
 
     enterLeaveNamespace(out, true /* enter */);
     out << "namespace implementation {\n\n";
 
-    status_t err = generateMethods(out, [&](const Method *method, const Interface *) {
-        return generateStubImplMethod(out, baseName, method);
+    generateMethods(out, [&](const Method* method, const Interface*) {
+        generateStubImplMethod(out, baseName, method);
     });
-
-    if (err != OK) {
-        return err;
-    }
 
     out.setLinePrefix("//");
     out << iface->localName()
@@ -203,8 +166,6 @@ status_t AST::generateCppImplSource(const std::string& outputPath) const {
 
     out << "}  // namespace implementation\n";
     enterLeaveNamespace(out, false /* leave */);
-
-    return OK;
 }
 
 }  // namespace android

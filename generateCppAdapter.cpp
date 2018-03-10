@@ -34,26 +34,8 @@
 
 namespace android {
 
-status_t AST::generateCppAdapter(const std::string& outputPath) const {
-    status_t err = OK;
-
-    err = generateCppAdapterHeader(outputPath);
-    if (err != OK) return err;
-    err = generateCppAdapterSource(outputPath);
-
-    return err;
-}
-
-status_t AST::generateCppAdapterHeader(const std::string& outputPath) const {
+void AST::generateCppAdapterHeader(Formatter& out) const {
     const std::string klassName = AST::isInterface() ? getInterface()->getAdapterName() : "Atypes";
-
-    Formatter out = mCoordinator->getFormatter(outputPath, mPackage,
-                                               Coordinator::Location::GEN_OUTPUT, klassName + ".h");
-
-    if (!out.isValid()) {
-        return UNKNOWN_ERROR;
-    }
-
     const std::string guard = makeHeaderGuard(klassName, true /* indicateGenerated */);
 
     out << "#ifndef " << guard << "\n";
@@ -76,14 +58,12 @@ status_t AST::generateCppAdapterHeader(const std::string& outputPath) const {
 
             generateMethods(out, [&](const Method* method, const Interface* /* interface */) {
                 if (method->isHidlReserved()) {
-                    return OK;
+                    return;
                 }
 
                 out << "virtual ";
                 method->generateCppSignature(out);
                 out << " override;\n";
-
-                return OK;
             });
             out << "private:\n";
             out << "::android::sp<" << mockName << "> mImpl;\n";
@@ -96,19 +76,10 @@ status_t AST::generateCppAdapterHeader(const std::string& outputPath) const {
     }
 
     out << "#endif // " << guard << "\n";
-
-    return OK;
 }
 
-status_t AST::generateCppAdapterSource(const std::string& outputPath) const {
+void AST::generateCppAdapterSource(Formatter& out) const {
     const std::string klassName = AST::isInterface() ? getInterface()->getAdapterName() : "Atypes";
-
-    Formatter out = mCoordinator->getFormatter(
-        outputPath, mPackage, Coordinator::Location::GEN_OUTPUT, klassName + ".cpp");
-
-    if (!out.isValid()) {
-        return UNKNOWN_ERROR;
-    }
 
     generateCppPackageInclude(out, mPackage, klassName);
 
@@ -137,7 +108,6 @@ status_t AST::generateCppAdapterSource(const std::string& outputPath) const {
 
         generateMethods(out, [&](const Method* method, const Interface* /* interface */) {
             generateAdapterMethod(out, method);
-            return OK;
         });
 
         enterLeaveNamespace(out, false /* enter */);
@@ -145,8 +115,6 @@ status_t AST::generateCppAdapterSource(const std::string& outputPath) const {
     } else {
         out << "// no adapters for types.hal\n";
     }
-
-    return OK;
 }
 
 void AST::generateAdapterMethod(Formatter& out, const Method* method) const {

@@ -19,6 +19,7 @@
 #define AST_H_
 
 #include <android-base/macros.h>
+#include <hidl-hash/Hash.h>
 #include <hidl-util/FQName.h>
 #include <functional>
 #include <map>
@@ -44,7 +45,7 @@ struct NamedReference;
 struct Type;
 
 struct AST {
-    AST(const Coordinator *coordinator, const std::string &path);
+    AST(const Coordinator* coordinator, const Hash* fileHash);
 
     bool setPackage(const char *package);
     bool addImport(const char *import);
@@ -59,7 +60,8 @@ struct AST {
 
     void addScopedType(NamedType* type, Scope* scope);
 
-    const std::string &getFilename() const;
+    const std::string& getFilename() const;
+    const Hash* getFileHash() const;
 
     // Look up local identifier.
     // It could be plain identifier or enum value as described by lookupEnumValue.
@@ -117,25 +119,24 @@ struct AST {
 
     status_t gatherReferencedTypes();
 
-    status_t generateCpp(const std::string &outputPath) const;
-    status_t generateCppHeaders(const std::string &outputPath) const;
-    status_t generateCppSources(const std::string &outputPath) const;
+    void generateCppSource(Formatter& out) const;
 
-    status_t generateCppImpl(const std::string &outputPath) const;
-    status_t generateCppImplHeader(const std::string& outputPath) const;
-    status_t generateCppImplSource(const std::string& outputPath) const;
+    void generateInterfaceHeader(Formatter& out) const;
+    void generateHwBinderHeader(Formatter& out) const;
+    void generateStubHeader(Formatter& out) const;
+    void generateProxyHeader(Formatter& out) const;
+    void generatePassthroughHeader(Formatter& out) const;
 
-    status_t generateCppAdapter(const std::string& outputPath) const;
-    status_t generateCppAdapterHeader(const std::string& outputPath) const;
-    status_t generateCppAdapterSource(const std::string& outputPath) const;
+    void generateCppImplHeader(Formatter& out) const;
+    void generateCppImplSource(Formatter& out) const;
 
-    status_t generateJava(
-            const std::string &outputPath,
-            const std::string &limitToType) const;
+    void generateCppAdapterHeader(Formatter& out) const;
+    void generateCppAdapterSource(Formatter& out) const;
 
-    status_t generateJavaTypes(
-            const std::string &outputPath,
-            const std::string &limitToType) const;
+    void generateJava(Formatter& out, const std::string& limitToType) const;
+    void generateJavaTypes(Formatter& out, const std::string& limitToType) const;
+
+    void generateVts(Formatter& out) const;
 
     void getImportedPackages(std::set<FQName> *importSet) const;
 
@@ -143,15 +144,7 @@ struct AST {
     // each AST in each package referenced in importSet.
     void getImportedPackagesHierarchy(std::set<FQName> *importSet) const;
 
-    status_t generateVts(const std::string &outputPath) const;
-
     bool isJavaCompatible() const;
-
-    // Return the set of FQNames for those interfaces and types that are
-    // actually referenced in the AST, not merely imported.
-    const std::set<FQName>& getImportedNames() const {
-        return mImportedNames;
-    }
 
     // Warning: this only includes names explicitly referenced in code.
     //   It does not include all names which are imported.
@@ -196,8 +189,8 @@ struct AST {
     void addToImportedNamesGranular(const FQName &fqName);
 
    private:
-    const Coordinator *mCoordinator;
-    std::string mPath;
+    const Coordinator* mCoordinator;
+    const Hash* mFileHash;
 
     RootScope mRootScope;
 
@@ -253,58 +246,41 @@ struct AST {
 
     static void generateCheckNonNull(Formatter &out, const std::string &nonNull);
 
-    status_t generateInterfaceHeader(const std::string &outputPath) const;
-    status_t generateHwBinderHeader(const std::string &outputPath) const;
-    status_t generateStubHeader(const std::string &outputPath) const;
-    status_t generateProxyHeader(const std::string &outputPath) const;
-    status_t generatePassthroughHeader(const std::string &outputPath) const;
-
-    status_t generateTypeSource(
-            Formatter &out, const std::string &ifaceName) const;
+    void generateTypeSource(Formatter& out, const std::string& ifaceName) const;
 
     // a method, and in which interface is it originally defined.
     // be careful of the case where method.isHidlReserved(), where interface
     // is effectively useless.
-    using MethodGenerator = std::function<status_t(const Method *, const Interface *)>;
+    using MethodGenerator = std::function<void(const Method*, const Interface*)>;
 
     void generateTemplatizationLink(Formatter& out) const;
     void generateCppTag(Formatter& out, const std::string& tag) const;
 
-    status_t generateMethods(Formatter &out,
-                             const MethodGenerator &gen,
-                             bool includeParents = true) const;
-    status_t generateStubImplMethod(Formatter &out,
-                                    const std::string &className,
-                                    const Method *method) const;
-    status_t generatePassthroughMethod(Formatter &out,
-                                       const Method *method) const;
-    status_t generateStaticProxyMethodSource(Formatter &out,
-                                             const std::string &className,
-                                             const Method *method) const;
-    status_t generateProxyMethodSource(Formatter &out,
-                                       const std::string &className,
-                                       const Method *method,
-                                       const Interface *superInterface) const;
+    void generateMethods(Formatter& out, const MethodGenerator& gen,
+                         bool includeParents = true) const;
+    void generateStubImplMethod(Formatter& out, const std::string& className,
+                                const Method* method) const;
+    void generatePassthroughMethod(Formatter& out, const Method* method) const;
+    void generateStaticProxyMethodSource(Formatter& out, const std::string& className,
+                                         const Method* method) const;
+    void generateProxyMethodSource(Formatter& out, const std::string& className,
+                                   const Method* method, const Interface* superInterface) const;
     void generateAdapterMethod(Formatter& out, const Method* method) const;
 
     void generateFetchSymbol(Formatter &out, const std::string &ifaceName) const;
 
-    status_t generateProxySource(
-            Formatter &out, const FQName &fqName) const;
+    void generateProxySource(Formatter& out, const FQName& fqName) const;
 
-    status_t generateStubSource(
-            Formatter &out, const Interface *iface) const;
+    void generateStubSource(Formatter& out, const Interface* iface) const;
 
-    status_t generateStubSourceForMethod(Formatter &out,
-                                         const Method *method,
-                                         const Interface *superInterface) const;
-    status_t generateStaticStubMethodSource(Formatter &out,
-                                            const FQName &fqName,
-                                            const Method *method) const;
+    void generateStubSourceForMethod(Formatter& out, const Method* method,
+                                     const Interface* superInterface) const;
+    void generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
+                                        const Method* method) const;
 
-    status_t generatePassthroughSource(Formatter &out) const;
+    void generatePassthroughSource(Formatter& out) const;
 
-    status_t generateInterfaceSource(Formatter &out) const;
+    void generateInterfaceSource(Formatter& out) const;
 
     enum InstrumentationEvent {
         SERVER_API_ENTRY = 0,
@@ -344,9 +320,9 @@ struct AST {
                               const NamedReference<Type>* arg, bool isReader,
                               bool addPrefixToName) const;
 
-    status_t emitTypeDeclarations(Formatter &out) const;
-    status_t emitJavaTypeDeclarations(Formatter &out) const;
-    status_t emitVtsTypeDeclarations(Formatter &out) const;
+    void emitTypeDeclarations(Formatter& out) const;
+    void emitJavaTypeDeclarations(Formatter& out) const;
+    void emitVtsTypeDeclarations(Formatter& out) const;
 
     DISALLOW_COPY_AND_ASSIGN(AST);
 };
