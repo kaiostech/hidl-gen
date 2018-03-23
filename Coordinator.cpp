@@ -506,16 +506,7 @@ status_t Coordinator::appendPackageInterfacesToVector(
     }
 
     for (const auto &fileName : fileNames) {
-        FQName subFQName(
-                package.package() + package.atVersion() + "::" + fileName);
-
-        if (!subFQName.isValid()) {
-            std::cerr << "ERROR: Whole-package import encountered invalid filename '" << fileName
-                      << "' in package " << package.package() << package.atVersion() << std::endl;
-
-            return UNKNOWN_ERROR;
-        }
-
+        FQName subFQName(package.package(), package.version(), fileName);
         packageInterfaces->push_back(subFQName);
     }
 
@@ -640,7 +631,7 @@ status_t Coordinator::enforceRestrictionsOnPackage(const FQName& fqName,
     // enforce all rules.
     status_t err;
 
-    err = enforceMinorVersionUprevs(package);
+    err = enforceMinorVersionUprevs(package, enforcement);
     if (err != OK) {
         return err;
     }
@@ -657,7 +648,8 @@ status_t Coordinator::enforceRestrictionsOnPackage(const FQName& fqName,
     return OK;
 }
 
-status_t Coordinator::enforceMinorVersionUprevs(const FQName &currentPackage) const {
+status_t Coordinator::enforceMinorVersionUprevs(const FQName& currentPackage,
+                                                Enforce enforcement) const {
     if(!currentPackage.hasVersion()) {
         std::cerr << "ERROR: Cannot enforce minor version uprevs for " << currentPackage.string()
                   << ": missing version." << std::endl;
@@ -718,7 +710,7 @@ status_t Coordinator::enforceMinorVersionUprevs(const FQName &currentPackage) co
         }
 
         const Interface *iface = nullptr;
-        AST *currentAST = parse(currentFQName);
+        AST* currentAST = parse(currentFQName, nullptr /* parsedASTs */, enforcement);
         if (currentAST != nullptr) {
             iface = currentAST->getInterface();
         }
