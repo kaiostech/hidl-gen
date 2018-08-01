@@ -1,4 +1,4 @@
-// Copyright (C) 2016 The Android Open Source Project
+// Copyright (C) 2018 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-cc_library {
-    name: "libhidl-gen-utils",
-    host_supported: true,
-    recovery_available: true,
-    defaults: ["hidl-gen-defaults"],
-    srcs: [
-        "FQName.cpp",
-        "FqInstance.cpp",
-    ],
-    shared_libs: [
-        "libbase",
-    ],
+// hidl-generated libs should only depend on @SystemApi
+java_library {
+    name: "hidl_system_api_test",
+    sdk_version: "system_current",
 
-    local_include_dirs: ["include/hidl-util"],
-    export_include_dirs: ["include"],
-    compile_multilib: "both",
+    static_libs: [
+        "android.hidl.base-V1.0-java",
+        "android.hidl.manager-V1.0-java",
+        "android.hardware.tests.baz-V1.0-java",
+    ],
 }

@@ -83,8 +83,8 @@ bool AST::isInterface() const {
     return mRootScope.getInterface() != nullptr;
 }
 
-bool AST::containsInterfaces() const {
-    return mRootScope.containsInterfaces();
+bool AST::definesInterfaces() const {
+    return mRootScope.definesInterfaces();
 }
 
 status_t AST::postParse() {
@@ -448,7 +448,6 @@ EnumValue* AST::lookupEnumValue(const FQName& fqName, std::string* errorMsg, Sco
     FQName enumTypeName = fqName.typeName();
     std::string enumValueName = fqName.valueName();
 
-    CHECK(enumTypeName.isValid());
     CHECK(!enumValueName.empty());
 
     Type* type = lookupType(enumTypeName, scope);
@@ -475,8 +474,6 @@ EnumValue* AST::lookupEnumValue(const FQName& fqName, std::string* errorMsg, Sco
 }
 
 Type* AST::lookupType(const FQName& fqName, Scope* scope) {
-    CHECK(fqName.isValid());
-
     if (fqName.name().empty()) {
         // Given a package and version???
         return nullptr;

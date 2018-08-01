@@ -29,6 +29,7 @@ struct CompoundType : public Scope {
     enum Style {
         STYLE_STRUCT,
         STYLE_UNION,
+        STYLE_SAFE_UNION,
     };
 
     CompoundType(Style style, const char* localName, const FQName& fullName,
@@ -48,6 +49,7 @@ struct CompoundType : public Scope {
 
     status_t validate() const override;
     status_t validateUniqueNames() const;
+    status_t validateSubTypeNames() const;
 
     std::string getCppType(StorageMode mode,
                            bool specifyNamespaces) const override;
@@ -108,6 +110,9 @@ struct CompoundType : public Scope {
     void emitJavaFieldInitializer(
             Formatter &out, const std::string &fieldName) const override;
 
+    void emitJavaFieldDefaultInitialValue(
+            Formatter &out, const std::string &declaredFieldName) const override;
+
     void emitJavaFieldReaderWriter(
             Formatter &out,
             size_t depth,
@@ -140,8 +145,50 @@ struct CompoundType : public Scope {
 
     bool containsInterface() const;
 private:
+
+    struct Layout {
+        size_t offset;
+        size_t align;
+        size_t size;
+
+        Layout() : offset(0), align(1), size(0) {}
+        static size_t getPad(size_t offset, size_t align);
+    };
+
+    struct CompoundLayout {
+        Layout overall;
+        Layout innerStruct;
+        Layout discriminator;
+    };
+
     Style mStyle;
     std::vector<NamedReference<Type>*>* mFields;
+
+    void emitLayoutAsserts(Formatter& out, const Layout& localLayout,
+                           const std::string& localLayoutName) const;
+
+    void emitInvalidSubTypeNamesError(const std::string& subTypeName,
+                                      const Location& location) const;
+
+    void emitSafeUnionTypeDefinitions(Formatter& out) const;
+    void emitSafeUnionTypeConstructors(Formatter& out) const;
+    void emitSafeUnionTypeDeclarations(Formatter& out) const;
+    std::unique_ptr<ScalarType> getUnionDiscriminatorType() const;
+
+    void emitSafeUnionCopyAndAssignDefinition(Formatter& out,
+                                              const std::string& parameterName,
+                                              bool isCopyConstructor,
+                                              bool usesMoveSemantics) const;
+
+    CompoundLayout getCompoundAlignmentAndSize() const;
+
+    void emitSafeUnionReaderWriterForInterfaces(
+            Formatter &out,
+            const std::string &name,
+            const std::string &parcelObj,
+            bool parcelObjIsPointer,
+            bool isReader,
+            ErrorMode mode) const;
 
     void emitStructReaderWriter(
             Formatter &out, const std::string &prefix, bool isReader) const;

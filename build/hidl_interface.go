@@ -175,7 +175,7 @@ func removeCoreDependencies(mctx android.LoadHookContext, dependencies []string)
 }
 
 func hidlGenCommand(lang string, roots []string, name *fqName) *string {
-	cmd := "$(location hidl-gen) -d $(depfile) -o $(genDir)"
+	cmd := "$(location hidl-gen) -p . -d $(depfile) -o $(genDir)"
 	cmd += " -L" + lang
 	cmd += " " + strings.Join(wrap("-r", roots, ""), " ")
 	cmd += " " + name.string()
@@ -217,7 +217,7 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 	}
 
 	// TODO(b/69002743): remove filegroups
-	mctx.CreateModule(android.ModuleFactoryAdaptor(genrule.FileGroupFactory), &fileGroupProperties{
+	mctx.CreateModule(android.ModuleFactoryAdaptor(android.FileGroupFactory), &fileGroupProperties{
 		Name:  proptools.StringPtr(name.fileGroupName()),
 		Owner: i.properties.Owner,
 		Srcs:  i.properties.Srcs,
@@ -251,12 +251,14 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 
 	if shouldGenerateLibrary {
 		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
-			Name:              proptools.StringPtr(name.string()),
-			Owner:             i.properties.Owner,
-			Vendor_available:  proptools.BoolPtr(true),
-			Defaults:          []string{"hidl-module-defaults"},
-			Generated_sources: []string{name.sourcesName()},
-			Generated_headers: []string{name.headersName()},
+			Name:               proptools.StringPtr(name.string()),
+			Owner:              i.properties.Owner,
+			Recovery_available: proptools.BoolPtr(true),
+			Vendor_available:   proptools.BoolPtr(true),
+			Double_loadable:    proptools.BoolPtr(isDoubleLoadable(name.string())),
+			Defaults:           []string{"hidl-module-defaults"},
+			Generated_sources:  []string{name.sourcesName()},
+			Generated_headers:  []string{name.headersName()},
 			Shared_libs: concat(cppDependencies, []string{
 				"libhidlbase",
 				"libhidltransport",
@@ -286,14 +288,21 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 			Out: concat(wrap(name.sanitizedDir()+"I", interfaces, ".java"),
 				wrap(name.sanitizedDir(), i.properties.Types, ".java")),
 		})
-		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory(true)), &javaProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:              proptools.StringPtr(name.javaName()),
 			Owner:             i.properties.Owner,
-			Sdk_version:       proptools.StringPtr("system_current"),
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
+			Installable:       proptools.BoolPtr(true),
 			Srcs:              []string{":" + name.javaSourcesName()},
-			Static_libs:       append(javaDependencies, "hwbinder"),
+			Static_libs:       javaDependencies,
+
+			// This should ideally be system_current, but android.hidl.base-V1.0-java is used
+			// to build framework, which is used to build system_current.  Use core_current
+			// plus hwbinder.stubs, which together form a subset of system_current that does
+			// not depend on framework.
+			Sdk_version: proptools.StringPtr("core_current"),
+			Libs:        []string{"hwbinder.stubs"},
 		})
 	}
 
@@ -307,7 +316,7 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 			Srcs:    i.properties.Srcs,
 			Out:     []string{name.sanitizedDir() + "Constants.java"},
 		})
-		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory(true)), &javaProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:              proptools.StringPtr(name.javaConstantsName()),
 			Owner:             i.properties.Owner,
 			Defaults:          []string{"hidl-java-module-defaults"},
@@ -425,4 +434,24 @@ func lookupInterface(name string) *hidlInterface {
 		}
 	}
 	return nil
+}
+
+var doubleLoadablePackageNames = []string{
+	"android.hardware.configstore@",
+	"android.hardware.graphics.allocator@",
+	"android.hardware.graphics.bufferqueue@",
+	"android.hardware.media.omx@",
+	"android.hardware.media@",
+	"android.hardware.neuralnetworks@",
+	"android.hidl.allocator@",
+	"android.hidl.token@",
+}
+
+func isDoubleLoadable(name string) bool {
+	for _, pkgname := range doubleLoadablePackageNames {
+		if strings.HasPrefix(name, pkgname) {
+			return true
+		}
+	}
+	return false
 }
