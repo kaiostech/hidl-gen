@@ -68,6 +68,9 @@ enum {
     LAST_HIDL_TRANSACTION   = 0x0fffffff,
 };
 
+const std::unique_ptr<ConstantExpression> Interface::FLAG_ONE_WAY =
+    std::make_unique<LiteralConstantExpression>(ScalarType::KIND_UINT32, 0x01, "oneway");
+
 Interface::Interface(const char* localName, const FQName& fullName, const Location& location,
                      Scope* parent, const Reference<Type>& superType, const Hash* fileHash)
     : Scope(localName, fullName, location, parent), mSuperType(superType), mFileHash(fileHash) {}
@@ -171,13 +174,13 @@ bool Interface::fillUnlinkToDeathMethod(Method *method) const {
                 {IMPL_PROXY,
                     [](auto &out) {
                         out << "std::unique_lock<std::mutex> lock(_hidl_mMutex);\n"
-                            << "for (auto it = _hidl_mDeathRecipients.begin();"
-                            << "it != _hidl_mDeathRecipients.end();"
+                            << "for (auto it = _hidl_mDeathRecipients.rbegin();"
+                            << "it != _hidl_mDeathRecipients.rend();"
                             << "++it) {\n";
                         out.indent([&] {
                             out.sIf("(*it)->getRecipient() == recipient", [&] {
                                 out << "::android::status_t status = remote()->unlinkToDeath(*it);\n"
-                                    << "_hidl_mDeathRecipients.erase(it);\n"
+                                    << "_hidl_mDeathRecipients.erase(it.base()-1);\n"
                                     << "return status == ::android::OK;\n";
                                 });
                             }).endl();
@@ -421,20 +424,18 @@ bool Interface::fillDebugMethod(Method *method) const {
         return false;
     }
 
-    method->fillImplementation(
-        HIDL_DEBUG_TRANSACTION,
-        {
-            {IMPL_INTERFACE,
-                [](auto &out) {
-                    out << "(void)fd;\n"
-                        << "(void)options;\n"
-                        << "return ::android::hardware::Void();\n";
-                }
-            },
-        }, /* cppImpl */
-        {
-            /* unused, as the debug method is hidden from Java */
-        } /* javaImpl */
+    method->fillImplementation(HIDL_DEBUG_TRANSACTION,
+                               {
+                                   {IMPL_INTERFACE,
+                                    [](auto& out) {
+                                        out << "(void)fd;\n"
+                                            << "(void)options;\n"
+                                            << "return ::android::hardware::Void();\n";
+                                    }},
+                               }, /* cppImpl */
+                               {
+                                   {IMPL_INTERFACE, [](auto& out) { out << "return;\n"; }},
+                               } /* javaImpl */
     );
 
     return true;
@@ -899,7 +900,7 @@ void Interface::emitVtsAttributeDeclaration(Formatter& out) const {
     }
 }
 
-void Interface::emitVtsMethodDeclaration(Formatter& out) const {
+void Interface::emitVtsMethodDeclaration(Formatter& out, bool isInherited) const {
     for (const auto &method : methods()) {
         if (method->isHidlReserved()) {
             continue;
@@ -908,10 +909,12 @@ void Interface::emitVtsMethodDeclaration(Formatter& out) const {
         out << "api: {\n";
         out.indent();
         out << "name: \"" << method->name() << "\"\n";
+        out << "is_inherited: " << (isInherited ? "true" : "false") << "\n";
         // Generate declaration for each return value.
         for (const auto &result : method->results()) {
             out << "return_type_hidl: {\n";
             out.indent();
+            out << "name: \"" << result->name() << "\"\n";
             result->type().emitVtsAttributeType(out);
             out.unindent();
             out << "}\n";
@@ -920,6 +923,7 @@ void Interface::emitVtsMethodDeclaration(Formatter& out) const {
         for (const auto &arg : method->args()) {
             out << "arg: {\n";
             out.indent();
+            out << "name: \"" << arg->name() << "\"\n";
             arg->type().emitVtsAttributeType(out);
             out.unindent();
             out << "}\n";
