@@ -107,6 +107,7 @@ using ::android::sp;
 using ::android::to_string;
 using ::android::TOLERANCE_NS;
 using ::android::wp;
+using ::android::hardware::GrantorDescriptor;
 using ::android::hardware::hidl_array;
 using ::android::hardware::hidl_death_recipient;
 using ::android::hardware::hidl_handle;
@@ -114,6 +115,8 @@ using ::android::hardware::hidl_memory;
 using ::android::hardware::hidl_string;
 using ::android::hardware::hidl_vec;
 using ::android::hardware::HidlMemory;
+using ::android::hardware::MQDescriptor;
+using ::android::hardware::MQFlavor;
 using ::android::hardware::Return;
 using ::android::hardware::Void;
 using ::android::hardware::tests::bar::V1_0::IBar;
@@ -189,6 +192,32 @@ std::string to_string(std::set<T> set) {
     ss << "}";
 
     return ss.str();
+}
+
+// does not check for fd equality
+static void checkNativeHandlesDataEquality(const native_handle_t* reference,
+                                           const native_handle_t* result) {
+    if (reference == nullptr || result == nullptr) {
+        EXPECT_EQ(reference, result);
+        return;
+    }
+
+    ASSERT_EQ(reference->version, result->version);
+    EXPECT_EQ(reference->numFds, result->numFds);
+    EXPECT_EQ(reference->numInts, result->numInts);
+
+    int offset = reference->numFds;
+    int numInts = reference->numInts;
+    EXPECT_ARRAYEQ(&(reference->data[offset]), &(result->data[offset]), numInts);
+}
+
+template <typename T, MQFlavor flavor>
+static void checkMQDescriptorEquality(const MQDescriptor<T, flavor>& expected,
+                                      const MQDescriptor<T, flavor>& actual) {
+    checkNativeHandlesDataEquality(expected.handle(), actual.handle());
+    EXPECT_EQ(expected.grantors().size(), actual.grantors().size());
+    EXPECT_EQ(expected.getQuantum(), actual.getQuantum());
+    EXPECT_EQ(expected.getFlags(), actual.getFlags());
 }
 
 struct Simple : public ISimple {
@@ -474,20 +503,19 @@ TEST_F(HidlTest, ToStringTest) {
     auto handle2 = native_handle_create(0, 1);
     handle->data[0] = 5;
     handle2->data[0] = 6;
-    IFoo::Everything e {
-        .u = {.p = reinterpret_cast<void *>(0x5)},
+    IFoo::Everything e{
+        .u = {.number = 3},
         .number = 10,
         .h = handle,
         .descSync = {std::vector<GrantorDescriptor>(), handle, 5},
         .descUnsync = {std::vector<GrantorDescriptor>(), handle2, 6},
         .mem = hidl_memory("mymem", handle, 5),
-        .p = reinterpret_cast<void *>(0x6),
+        .p = reinterpret_cast<void*>(0x6),
         .vs = {"hello", "world"},
         .multidimArray = hidl_vec<hidl_string>{"hello", "great", "awesome", "nice"}.data(),
         .sArray = hidl_vec<hidl_string>{"awesome", "thanks", "you're welcome"}.data(),
         .anotherStruct = {.first = "first", .last = "last"},
-        .bf = IFoo::BitField::V0 | IFoo::BitField::V2
-    };
+        .bf = IFoo::BitField::V0 | IFoo::BitField::V2};
     LOG(INFO) << toString(e);
     LOG(INFO) << toString(foo);
     // toString is for debugging purposes only; no good EXPECT
@@ -1431,6 +1459,26 @@ TEST_F(HidlTest, FooNullCallbackTest) {
                 }));
 }
 
+TEST_F(HidlTest, StructWithFmq) {
+    IFoo::WithFmq w = {
+        .scatterGathered =
+            {
+                .descSync = {std::vector<GrantorDescriptor>(), native_handle_create(0, 1), 5},
+            },
+        .containsPointer =
+            {
+                .descSync = {std::vector<GrantorDescriptor>(), native_handle_create(0, 1), 5},
+                .foo = nullptr,
+            },
+    };
+    EXPECT_OK(foo->repeatWithFmq(w, [&](const IFoo::WithFmq& returned) {
+        checkMQDescriptorEquality(w.scatterGathered.descSync, returned.scatterGathered.descSync);
+        checkMQDescriptorEquality(w.containsPointer.descSync, returned.containsPointer.descSync);
+
+        EXPECT_EQ(w.containsPointer.foo, returned.containsPointer.foo);
+    }));
+}
+
 TEST_F(HidlTest, FooNonNullCallbackTest) {
     hidl_array<hidl_string, 5, 3> in;
 
@@ -2085,24 +2133,6 @@ TEST_F(HidlTest, SafeUnionInterfaceTest) {
                     EXPECT_EQ(testVector, safeUnion.e());
                 }));
         }));
-}
-
-// does not check for fd equality
-static void checkNativeHandlesDataEquality(const native_handle_t* reference,
-                                           const native_handle_t* result) {
-    if (reference == nullptr || result == nullptr) {
-        EXPECT_EQ(reference == nullptr, result == nullptr);
-        return;
-    }
-
-    ASSERT_NE(reference, result);
-    ASSERT_EQ(reference->version, result->version);
-    EXPECT_EQ(reference->numFds, result->numFds);
-    EXPECT_EQ(reference->numInts, result->numInts);
-
-    int offset = reference->numFds;
-    int numInts = reference->numInts;
-    EXPECT_ARRAYEQ(&(reference->data[offset]), &(result->data[offset]), numInts);
 }
 
 TEST_F(HidlTest, SafeUnionNullHandleTest) {
