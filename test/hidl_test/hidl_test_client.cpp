@@ -720,7 +720,7 @@ TEST_F(HidlTest, ServiceNotificationTest) {
 
     std::unique_lock<std::mutex> lock(notification->mutex);
 
-    notification->condition.wait_for(lock, std::chrono::milliseconds(2), [&notification]() {
+    notification->condition.wait_for(lock, std::chrono::milliseconds(500), [&notification]() {
         return notification->getRegistrations().size() >= 2;
     });
 
@@ -776,7 +776,7 @@ TEST_F(HidlTest, ServiceAllNotificationTest) {
 
     std::unique_lock<std::mutex> lock(notification->mutex);
 
-    notification->condition.wait_for(lock, std::chrono::milliseconds(2), [&notification]() {
+    notification->condition.wait_for(lock, std::chrono::milliseconds(500), [&notification]() {
         return notification->getRegistrations().size() >= 2;
     });
 
@@ -1918,7 +1918,7 @@ TEST_F(HidlTest, TrieStressTest) {
 
 TEST_F(HidlTest, SafeUnionNoInitTest) {
     EXPECT_OK(safeunionInterface->newLargeSafeUnion([&](const LargeSafeUnion& safeUnion) {
-        EXPECT_EQ(LargeSafeUnion::hidl_discriminator::hidl_no_init, safeUnion.getDiscriminator());
+        EXPECT_EQ(LargeSafeUnion::hidl_discriminator::noinit, safeUnion.getDiscriminator());
     }));
 }
 
@@ -2095,7 +2095,7 @@ TEST_F(HidlTest, SafeUnionInterfaceTest) {
 
     EXPECT_OK(
         safeunionInterface->newInterfaceTypeSafeUnion([&](const InterfaceTypeSafeUnion& safeUnion) {
-            EXPECT_EQ(InterfaceTypeSafeUnion::hidl_discriminator::hidl_no_init,
+            EXPECT_EQ(InterfaceTypeSafeUnion::hidl_discriminator::noinit,
                       safeUnion.getDiscriminator());
 
             isOk(safeunionInterface->setInterfaceB(
@@ -2310,8 +2310,8 @@ TEST_F(HidlTest, SafeUnionHandleWithMultipleFdsTest) {
 TEST_F(HidlTest, SafeUnionEqualityTest) {
     EXPECT_OK(safeunionInterface->newLargeSafeUnion([&](const LargeSafeUnion& one) {
         EXPECT_OK(safeunionInterface->newLargeSafeUnion([&](const LargeSafeUnion& two) {
-            EXPECT_FALSE(one == two);
-            EXPECT_TRUE(one != two);
+            EXPECT_TRUE(one == two);
+            EXPECT_FALSE(one != two);
         }));
 
         EXPECT_OK(safeunionInterface->setA(one, 1, [&](const LargeSafeUnion& one) {
