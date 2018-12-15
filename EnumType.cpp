@@ -49,6 +49,14 @@ void EnumType::forEachValueFromRoot(const std::function<void(EnumValue*)> f) con
     }
 }
 
+size_t EnumType::numValueNames() const {
+    size_t count = 0;
+    for (const auto it : typeChain()) {
+        count += it->values().size();
+    }
+    return count;
+}
+
 void EnumType::addValue(EnumValue* value) {
     CHECK(value != nullptr);
     mValues.push_back(value);
@@ -281,26 +289,16 @@ void EnumType::emitIteratorDeclaration(Formatter& out) const {
         elementCount += type->mValues.size();
     }
 
-    out << "template<> struct hidl_enum_range<" << getCppStackType() << "> ";
+    out << "template<> constexpr std::array<" << getCppStackType() << ", " << elementCount
+        << "> hidl_enum_values<" << getCppStackType() << "> = ";
     out.block([&] {
-        out << "const " << getCppStackType() << "* begin() { return static_begin(); }\n";
-        out << "const " << getCppStackType() << "* end() { return begin() + " << elementCount
-            << "; }\n";
-        out << "private:\n";
-        out << "static const " << getCppStackType() << "* static_begin() ";
-        out.block([&] {
-            out << "static const " << getCppStackType() << " kVals[" << elementCount << "] ";
-            out.block([&] {
-                auto enumerators = typeChain();
-                std::reverse(enumerators.begin(), enumerators.end());
-                for (const auto* type : enumerators) {
-                    for (const auto* enumValue : type->mValues) {
-                        out << fullName() << "::" << enumValue->name() << ",\n";
-                    }
-                }
-            }) << ";\n";
-            out << "return &kVals[0];\n";
-        }).endl();
+        auto enumerators = typeChain();
+        std::reverse(enumerators.begin(), enumerators.end());
+        for (const auto* type : enumerators) {
+            for (const auto* enumValue : type->mValues) {
+                out << fullName() << "::" << enumValue->name() << ",\n";
+            }
+        }
     }) << ";\n";
 }
 
@@ -372,9 +370,11 @@ void EnumType::emitBitFieldBitwiseAssignmentOperator(
 void EnumType::emitGlobalTypeDeclarations(Formatter& out) const {
     out << "namespace android {\n";
     out << "namespace hardware {\n";
+    out << "namespace details {\n";
 
     emitIteratorDeclaration(out);
 
+    out << "}  // namespace details\n";
     out << "}  // namespace hardware\n";
     out << "}  // namespace android\n\n";
 }
