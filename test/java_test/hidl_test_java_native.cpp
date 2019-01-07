@@ -171,6 +171,22 @@ TEST_F(HidlTest, BazSomeOtherBaseMethodTest) {
                }));
 }
 
+TEST_F(HidlTest, SomeOtherBaseMethodInvalidString) {
+    IBase::Foo foo {
+        .y = {
+            .s = "\xff",
+        }
+    };
+
+    auto ret = baz->someOtherBaseMethod(foo, [&](const auto&) {
+        ADD_FAILURE() << "Should not accept invalid UTF-8 String";
+    });
+
+    EXPECT_FALSE(ret.isOk());
+
+    EXPECT_OK(baz->ping());
+}
+
 TEST_F(HidlTest, BazSomeMethodWithFooArraysTest) {
     hidl_array<IBase::Foo, 2> foo;
 
@@ -423,7 +439,7 @@ TEST_F(HidlTest, BazDoThatAndReturnSomethingMethodTest) {
 }
 
 TEST_F(HidlTest, BazDoQuiteABitMethodTest) {
-    auto result = baz->doQuiteABit(1, 2ll, 3.0f, 4.0);
+    auto result = baz->doQuiteABit(1, 2LL, 3.0f, 4.0);
 
     EXPECT_OK(result);
     EXPECT_EQ(result, 666.5);
