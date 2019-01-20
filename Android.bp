@@ -34,6 +34,10 @@ cc_defaults {
         "-Werror",
         "-Wextra-semi",
     ],
+    tidy_checks: [
+        // _hidl_cb and addOnewayTask are stuck because of the legacy ABI
+        "-performance-unnecessary-value-param",
+    ],
     product_variables: {
         debuggable: {
             cflags: ["-D__ANDROID_DEBUGGABLE__"]
