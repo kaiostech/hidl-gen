@@ -20,6 +20,7 @@
 #include <android/hardware/tests/bar/1.0/IComplicated.h>
 #include <android/hardware/tests/bar/1.0/IImportRules.h>
 #include <android/hardware/tests/baz/1.0/IBaz.h>
+#include <android/hardware/tests/expression/1.0/IExpression.h>
 #include <android/hardware/tests/foo/1.0/BnHwSimple.h>
 #include <android/hardware/tests/foo/1.0/BpHwSimple.h>
 #include <android/hardware/tests/foo/1.0/BsSimple.h>
@@ -35,6 +36,7 @@
 #include <android/hardware/tests/pointer/1.0/IPointer.h>
 #include <android/hardware/tests/safeunion/1.0/IOtherInterface.h>
 #include <android/hardware/tests/safeunion/1.0/ISafeUnion.h>
+#include <android/hardware/tests/safeunion/cpp/1.0/ICppSafeUnion.h>
 #include <android/hardware/tests/trie/1.0/ITrie.h>
 
 #include <gtest/gtest.h>
@@ -122,6 +124,7 @@ using ::android::hardware::Void;
 using ::android::hardware::tests::bar::V1_0::IBar;
 using ::android::hardware::tests::bar::V1_0::IComplicated;
 using ::android::hardware::tests::baz::V1_0::IBaz;
+using ::android::hardware::tests::expression::V1_0::IExpression;
 using ::android::hardware::tests::foo::V1_0::Abc;
 using ::android::hardware::tests::foo::V1_0::IFoo;
 using ::android::hardware::tests::foo::V1_0::IFooCallback;
@@ -136,6 +139,7 @@ using ::android::hardware::tests::memory::V1_0::IMemoryTest;
 using ::android::hardware::tests::multithread::V1_0::IMultithread;
 using ::android::hardware::tests::pointer::V1_0::IGraph;
 using ::android::hardware::tests::pointer::V1_0::IPointer;
+using ::android::hardware::tests::safeunion::cpp::V1_0::ICppSafeUnion;
 using ::android::hardware::tests::safeunion::V1_0::IOtherInterface;
 using ::android::hardware::tests::safeunion::V1_0::ISafeUnion;
 using ::android::hardware::tests::trie::V1_0::ITrie;
@@ -370,6 +374,7 @@ public:
     sp<IPointer> validationPointerInterface;
     sp<IMultithread> multithreadInterface;
     sp<ITrie> trieInterface;
+    sp<ICppSafeUnion> cppSafeunionInterface;
     sp<ISafeUnion> safeunionInterface;
     TestMode mode;
     bool enableDelayMeasurementTests;
@@ -441,6 +446,11 @@ public:
         ASSERT_NE(trieInterface, nullptr);
         ASSERT_EQ(trieInterface->isRemote(), mode == BINDERIZED);
 
+        cppSafeunionInterface =
+            ICppSafeUnion::getService("default", mode == PASSTHROUGH /* getStub */);
+        ASSERT_NE(cppSafeunionInterface, nullptr);
+        ASSERT_EQ(cppSafeunionInterface->isRemote(), mode == BINDERIZED);
+
         safeunionInterface = ISafeUnion::getService("safeunion", mode == PASSTHROUGH /* getStub */);
         ASSERT_NE(safeunionInterface, nullptr);
         ASSERT_EQ(safeunionInterface->isRemote(), mode == BINDERIZED);
@@ -468,6 +478,7 @@ public:
     sp<IPointer> pointerInterface;
     sp<IPointer> validationPointerInterface;
     sp<ITrie> trieInterface;
+    sp<ICppSafeUnion> cppSafeunionInterface;
     sp<ISafeUnion> safeunionInterface;
     TestMode mode = TestMode::PASSTHROUGH;
 
@@ -486,6 +497,7 @@ public:
         pointerInterface = gHidlEnvironment->pointerInterface;
         validationPointerInterface = gHidlEnvironment->validationPointerInterface;
         trieInterface = gHidlEnvironment->trieInterface;
+        cppSafeunionInterface = gHidlEnvironment->cppSafeunionInterface;
         safeunionInterface = gHidlEnvironment->safeunionInterface;
         mode = gHidlEnvironment->mode;
         ALOGI("Test setup complete");
@@ -522,6 +534,17 @@ TEST_F(HidlTest, ToStringTest) {
     // statement can be written here.
 }
 
+TEST_F(HidlTest, ConstantExpressionTest) {
+    // these tests are written so that these always evaluate to one
+
+    for (const auto value : hidl_enum_range<IExpression::OperatorSanityCheck>()) {
+        EXPECT_EQ(1, static_cast<int32_t>(value));
+    }
+    for (const auto value : hidl_enum_range<IExpression::EnumTagTest>()) {
+        EXPECT_EQ(1, static_cast<int32_t>(value));
+    }
+}
+
 TEST_F(HidlTest, PassthroughLookupTest) {
     // IFoo is special because it returns an interface no matter
     //   what instance name is requested. In general, this is BAD!
@@ -541,13 +564,22 @@ TEST_F(HidlTest, EnumIteratorTest) {
 
     for (const auto value : hidl_enum_range<Empty>()) {
         (void)value;
-        EXPECT_TRUE(false) << "Empty iterator should not iterate";
+        ADD_FAILURE() << "Empty range should not iterate";
     }
+
+    EXPECT_EQ(hidl_enum_range<Grandchild>().begin(), hidl_enum_range<Grandchild>().cbegin());
+    EXPECT_EQ(hidl_enum_range<Grandchild>().end(), hidl_enum_range<Grandchild>().cend());
+    EXPECT_EQ(hidl_enum_range<Grandchild>().rbegin(), hidl_enum_range<Grandchild>().crbegin());
+    EXPECT_EQ(hidl_enum_range<Grandchild>().rend(), hidl_enum_range<Grandchild>().crend());
 
     auto it1 = hidl_enum_range<Grandchild>().begin();
     EXPECT_EQ(Grandchild::A, *it1++);
     EXPECT_EQ(Grandchild::B, *it1++);
     EXPECT_EQ(hidl_enum_range<Grandchild>().end(), it1);
+    auto it1r = hidl_enum_range<Grandchild>().rbegin();
+    EXPECT_EQ(Grandchild::B, *it1r++);
+    EXPECT_EQ(Grandchild::A, *it1r++);
+    EXPECT_EQ(hidl_enum_range<Grandchild>().rend(), it1r);
 
     auto it2 = hidl_enum_range<SkipsValues>().begin();
     EXPECT_EQ(SkipsValues::A, *it2++);
@@ -556,6 +588,13 @@ TEST_F(HidlTest, EnumIteratorTest) {
     EXPECT_EQ(SkipsValues::D, *it2++);
     EXPECT_EQ(SkipsValues::E, *it2++);
     EXPECT_EQ(hidl_enum_range<SkipsValues>().end(), it2);
+    auto it2r = hidl_enum_range<SkipsValues>().rbegin();
+    EXPECT_EQ(SkipsValues::E, *it2r++);
+    EXPECT_EQ(SkipsValues::D, *it2r++);
+    EXPECT_EQ(SkipsValues::C, *it2r++);
+    EXPECT_EQ(SkipsValues::B, *it2r++);
+    EXPECT_EQ(SkipsValues::A, *it2r++);
+    EXPECT_EQ(hidl_enum_range<SkipsValues>().rend(), it2r);
 
     auto it3 = hidl_enum_range<MultipleValues>().begin();
     EXPECT_EQ(MultipleValues::A, *it3++);
@@ -563,6 +602,12 @@ TEST_F(HidlTest, EnumIteratorTest) {
     EXPECT_EQ(MultipleValues::C, *it3++);
     EXPECT_EQ(MultipleValues::D, *it3++);
     EXPECT_EQ(hidl_enum_range<MultipleValues>().end(), it3);
+    auto it3r = hidl_enum_range<MultipleValues>().rbegin();
+    EXPECT_EQ(MultipleValues::D, *it3r++);
+    EXPECT_EQ(MultipleValues::C, *it3r++);
+    EXPECT_EQ(MultipleValues::B, *it3r++);
+    EXPECT_EQ(MultipleValues::A, *it3r++);
+    EXPECT_EQ(hidl_enum_range<MultipleValues>().rend(), it3r);
 }
 
 TEST_F(HidlTest, EnumToStringTest) {
@@ -675,6 +720,30 @@ TEST_F(HidlTest, ServiceListByInterfaceTest) {
             EXPECT_EQ(difference.size(), 0u)
                 << "service(s) not registered " << to_string(difference);
         }));
+}
+
+TEST_F(HidlTest, ServiceListManifestByInterfaceTest) {
+    // system service
+    EXPECT_OK(manager->listManifestByInterface(IServiceManager::descriptor,
+                                               [](const hidl_vec<hidl_string>& registered) {
+                                                   ASSERT_EQ(1, registered.size());
+                                                   EXPECT_EQ("default", registered[0]);
+                                               }));
+    // vendor service (this is required on all devices)
+    EXPECT_OK(
+        manager->listManifestByInterface("android.hardware.configstore@1.0::ISurfaceFlingerConfigs",
+                                         [](const hidl_vec<hidl_string>& registered) {
+                                             ASSERT_EQ(1, registered.size());
+                                             EXPECT_EQ("default", registered[0]);
+                                         }));
+    // test service that will never be in a manifest
+    EXPECT_OK(manager->listManifestByInterface(
+        IParent::descriptor,
+        [](const hidl_vec<hidl_string>& registered) { ASSERT_EQ(0, registered.size()); }));
+    // invalid service
+    EXPECT_OK(manager->listManifestByInterface(
+        "!(*#&$ASDASLKDJasdlkjfads",
+        [](const hidl_vec<hidl_string>& registered) { ASSERT_EQ(0, registered.size()); }));
 }
 
 TEST_F(HidlTest, SubInterfaceServiceRegistrationTest) {
@@ -2367,6 +2436,26 @@ TEST_F(HidlTest, SafeUnionSwitchActiveComponentsDestructorTest) {
 
     safeUnion.a(1);
     EXPECT_EQ(1, otherInterface->getStrongCount());
+}
+
+TEST_F(HidlTest, SafeUnionCppSpecificTest) {
+    ICppSafeUnion::PointerFmqSafeUnion pointerFmqSafeUnion;
+    pointerFmqSafeUnion.fmqSync({std::vector<GrantorDescriptor>(), native_handle_create(0, 1), 5});
+
+    EXPECT_OK(cppSafeunionInterface->repeatPointerFmqSafeUnion(
+        pointerFmqSafeUnion, [&](const ICppSafeUnion::PointerFmqSafeUnion& fmq) {
+            ASSERT_EQ(pointerFmqSafeUnion.getDiscriminator(), fmq.getDiscriminator());
+            checkMQDescriptorEquality(pointerFmqSafeUnion.fmqSync(), fmq.fmqSync());
+        }));
+
+    ICppSafeUnion::FmqSafeUnion fmqSafeUnion;
+    fmqSafeUnion.fmqUnsync({std::vector<GrantorDescriptor>(), native_handle_create(0, 1), 5});
+
+    EXPECT_OK(cppSafeunionInterface->repeatFmqSafeUnion(
+        fmqSafeUnion, [&](const ICppSafeUnion::FmqSafeUnion& fmq) {
+            ASSERT_EQ(fmqSafeUnion.getDiscriminator(), fmq.getDiscriminator());
+            checkMQDescriptorEquality(fmqSafeUnion.fmqUnsync(), fmq.fmqUnsync());
+        }));
 }
 
 class HidlMultithreadTest : public ::testing::Test {
