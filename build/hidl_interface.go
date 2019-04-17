@@ -16,7 +16,9 @@ package hidl
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -32,7 +34,10 @@ var (
 
 	pctx = android.NewPackageContext("android/hidl")
 
-	hidl     = pctx.HostBinToolVariable("hidl", "hidl-gen")
+	hidl      = pctx.HostBinToolVariable("hidl", "hidl-gen")
+	vtsc      = pctx.HostBinToolVariable("vtsc", "vtsc")
+	soong_zip = pctx.HostBinToolVariable("soong_zip", "soong_zip")
+
 	hidlRule = pctx.StaticRule("hidlRule", blueprint.RuleParams{
 		Depfile:     "${depfile}",
 		Deps:        blueprint.DepsGCC,
@@ -40,10 +45,27 @@ var (
 		CommandDeps: []string{"${hidl}"},
 		Description: "HIDL ${language}: ${in} => ${out}",
 	}, "depfile", "fqName", "genDir", "language", "roots")
+
+	hidlSrcJarRule = pctx.StaticRule("hidlSrcJarRule", blueprint.RuleParams{
+		Depfile: "${depfile}",
+		Deps:    blueprint.DepsGCC,
+		Command: "rm -rf ${genDir} && " +
+			"${hidl} -R -p . -d ${depfile} -o ${genDir}/srcs -L ${language} ${roots} ${fqName} && " +
+			"${soong_zip} -o ${genDir}/srcs.srcjar -C ${genDir}/srcs -D ${genDir}/srcs",
+		CommandDeps: []string{"${hidl}", "${soong_zip}"},
+		Description: "HIDL ${language}: ${in} => srcs.srcjar",
+	}, "depfile", "fqName", "genDir", "language", "roots")
+
+	vtsRule = pctx.StaticRule("vtsRule", blueprint.RuleParams{
+		Command:     "rm -rf ${genDir} && ${vtsc} -m${mode} -t${type} ${inputDir}/${packagePath} ${genDir}/${packagePath}",
+		CommandDeps: []string{"${vtsc}"},
+		Description: "VTS ${mode} ${type}: ${in} => ${out}",
+	}, "mode", "type", "inputDir", "genDir", "packagePath")
 )
 
 func init() {
 	android.RegisterModuleType("hidl_interface", hidlInterfaceFactory)
+	android.RegisterMakeVarsProvider(pctx, makeVarsProvider)
 }
 
 type hidlGenProperties struct {
@@ -79,6 +101,13 @@ func (g *hidlGenRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		g.genOutputs = append(g.genOutputs, android.PathForModuleGen(ctx, output))
 	}
 
+	if g.properties.Language == "vts" && isVtsSpecPackage(ctx.ModuleName()) {
+		vtsList := vtsList(ctx.AConfig())
+		vtsListMutex.Lock()
+		*vtsList = append(*vtsList, g.genOutputs.Paths()...)
+		vtsListMutex.Unlock()
+	}
+
 	var fullRootOptions []string
 	var currentPath android.OptionalPath
 	ctx.VisitDirectDeps(func(dep android.Module) {
@@ -103,8 +132,13 @@ func (g *hidlGenRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		inputs = append(inputs, currentPath.Path())
 	}
 
+	rule := hidlRule
+	if g.properties.Language == "java" {
+		rule = hidlSrcJarRule
+	}
+
 	ctx.ModuleBuild(pctx, android.ModuleBuildParams{
-		Rule:            hidlRule,
+		Rule:            rule,
 		Inputs:          inputs,
 		Output:          g.genOutputs[0],
 		ImplicitOutputs: g.genOutputs[1:],
@@ -147,6 +181,83 @@ func hidlGenFactory() android.Module {
 	return g
 }
 
+type vtscProperties struct {
+	Mode        string
+	Type        string
+	SpecName    string // e.g. foo-vts.spec
+	Outputs     []string
+	PackagePath string // e.g. android/hardware/foo/1.0/
+}
+
+type vtscRule struct {
+	android.ModuleBase
+
+	properties vtscProperties
+
+	genOutputDir android.Path
+	genInputDir  android.Path
+	genInputs    android.Paths
+	genOutputs   android.WritablePaths
+}
+
+var _ android.SourceFileProducer = (*vtscRule)(nil)
+var _ genrule.SourceFileGenerator = (*vtscRule)(nil)
+
+func (g *vtscRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	g.genOutputDir = android.PathForModuleGen(ctx)
+
+	ctx.VisitDirectDeps(func(dep android.Module) {
+		if specs, ok := dep.(*hidlGenRule); ok {
+			g.genInputDir = specs.genOutputDir
+			g.genInputs = specs.genOutputs.Paths()
+		}
+	})
+
+	for _, output := range g.properties.Outputs {
+		g.genOutputs = append(g.genOutputs, android.PathForModuleGen(ctx, output))
+	}
+
+	ctx.ModuleBuild(pctx, android.ModuleBuildParams{
+		Rule:    vtsRule,
+		Inputs:  g.genInputs,
+		Outputs: g.genOutputs,
+		Args: map[string]string{
+			"mode":        g.properties.Mode,
+			"type":        g.properties.Type,
+			"inputDir":    g.genInputDir.String(),
+			"genDir":      g.genOutputDir.String(),
+			"packagePath": g.properties.PackagePath,
+		},
+	})
+}
+
+func (g *vtscRule) GeneratedSourceFiles() android.Paths {
+	return g.genOutputs.Paths()
+}
+
+func (g *vtscRule) Srcs() android.Paths {
+	return g.genOutputs.Paths()
+}
+
+func (g *vtscRule) GeneratedDeps() android.Paths {
+	return g.genOutputs.Paths()
+}
+
+func (g *vtscRule) GeneratedHeaderDirs() android.Paths {
+	return android.Paths{g.genOutputDir}
+}
+
+func (g *vtscRule) DepsMutator(ctx android.BottomUpMutatorContext) {
+	ctx.AddDependency(ctx.Module(), nil, g.properties.SpecName)
+}
+
+func vtscFactory() android.Module {
+	g := &vtscRule{}
+	g.AddProperties(&g.properties)
+	android.InitAndroidModule(g)
+	return g
+}
+
 type hidlInterfaceProperties struct {
 	// Vndk properties for interface library only.
 	cc.VndkProperties
@@ -160,7 +271,7 @@ type hidlInterfaceProperties struct {
 	// Package root for this package, must be a prefix of name
 	Root string
 
-	// List of non-TypeDef types declared in types.hal.
+	// Unused/deprecated: List of non-TypeDef types declared in types.hal.
 	Types []string
 
 	// Whether to generate the Java library stubs.
@@ -170,6 +281,9 @@ type hidlInterfaceProperties struct {
 	// Whether to generate a Java library containing constants
 	// expressed by @export annotations in the hal files.
 	Gen_java_constants bool
+
+	// Whether to generate VTS-related testing libraries.
+	Gen_vts *bool
 
 	// example: -randroid.hardware:hardware/interfaces
 	Full_root_option string `blueprint:"mutated"`
@@ -313,8 +427,9 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 
 	shouldGenerateLibrary := !isCorePackage(name.string())
 	// explicitly true if not specified to give early warning to devs
-	shouldGenerateJava := i.properties.Gen_java == nil || *i.properties.Gen_java
+	shouldGenerateJava := proptools.BoolDefault(i.properties.Gen_java, true)
 	shouldGenerateJavaConstants := i.properties.Gen_java_constants
+	shouldGenerateVts := shouldGenerateLibrary && proptools.BoolDefault(i.properties.Gen_vts, true)
 
 	var libraryIfExists []string
 	if shouldGenerateLibrary {
@@ -390,16 +505,14 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Root:       i.properties.Root,
 			Interfaces: i.properties.Interfaces,
 			Inputs:     i.properties.Srcs,
-			Outputs: concat(wrap(name.sanitizedDir()+"I", interfaces, ".java"),
-				wrap(name.sanitizedDir(), i.properties.Types, ".java")),
+			Outputs:    []string{"srcs.srcjar"},
 		}, &i.inheritCommonProperties)
-		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
-			Name:              proptools.StringPtr(name.javaName()),
+
+		commonJavaProperties := javaProperties{
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
 			Installable:       proptools.BoolPtr(true),
 			Srcs:              []string{":" + name.javaSourcesName()},
-			Static_libs:       javaDependencies,
 
 			// This should ideally be system_current, but android.hidl.base-V1.0-java is used
 			// to build framework, which is used to build system_current.  Use core_current
@@ -407,7 +520,16 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			// not depend on framework.
 			Sdk_version: proptools.StringPtr("core_current"),
 			Libs:        []string{"hwbinder.stubs"},
-		}, &i.inheritCommonProperties)
+		}
+
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
+			Name:        proptools.StringPtr(name.javaName()),
+			Static_libs: javaDependencies,
+		}, &i.inheritCommonProperties, &commonJavaProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
+			Name: proptools.StringPtr(name.javaSharedName()),
+			Libs: javaDependencies,
+		}, &i.inheritCommonProperties, &commonJavaProperties)
 	}
 
 	if shouldGenerateJavaConstants {
@@ -506,6 +628,85 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		}, wrap("", dependencies, "-adapter-helper"), cppDependencies, libraryIfExists),
 		Group_static_libs: proptools.BoolPtr(true),
 	}, &i.inheritCommonProperties)
+
+	if shouldGenerateVts {
+		vtsSpecs := concat(wrap(name.dir(), interfaces, ".vts"), wrap(name.dir(), types, ".vts"))
+
+		mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
+			Name: proptools.StringPtr(name.vtsSpecName()),
+		}, &hidlGenProperties{
+			Language:   "vts",
+			FqName:     name.string(),
+			Root:       i.properties.Root,
+			Interfaces: i.properties.Interfaces,
+			Inputs:     i.properties.Srcs,
+			Outputs:    vtsSpecs,
+		}, &i.inheritCommonProperties)
+
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
+			Name: proptools.StringPtr(name.vtsDriverSourcesName()),
+		}, &vtscProperties{
+			Mode:        "DRIVER",
+			Type:        "SOURCE",
+			SpecName:    name.vtsSpecName(),
+			Outputs:     wrap("", vtsSpecs, ".cpp"),
+			PackagePath: name.dir(),
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
+			Name: proptools.StringPtr(name.vtsDriverHeadersName()),
+		}, &vtscProperties{
+			Mode:        "DRIVER",
+			Type:        "HEADER",
+			SpecName:    name.vtsSpecName(),
+			Outputs:     wrap("", vtsSpecs, ".h"),
+			PackagePath: name.dir(),
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
+			Name:                      proptools.StringPtr(name.vtsDriverName()),
+			Defaults:                  []string{"VtsHalDriverDefaults"},
+			Generated_sources:         []string{name.vtsDriverSourcesName()},
+			Generated_headers:         []string{name.vtsDriverHeadersName()},
+			Export_generated_headers:  []string{name.vtsDriverHeadersName()},
+			Shared_libs:               wrap("", cppDependencies, "-vts.driver"),
+			Export_shared_lib_headers: wrap("", cppDependencies, "-vts.driver"),
+			Static_libs:               concat(cppDependencies, libraryIfExists),
+
+			// TODO(b/126244142)
+			Cflags: []string{"-Wno-unused-variable"},
+		}, &i.inheritCommonProperties)
+
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
+			Name: proptools.StringPtr(name.vtsProfilerSourcesName()),
+		}, &vtscProperties{
+			Mode:        "PROFILER",
+			Type:        "SOURCE",
+			SpecName:    name.vtsSpecName(),
+			Outputs:     wrap("", vtsSpecs, ".cpp"),
+			PackagePath: name.dir(),
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
+			Name: proptools.StringPtr(name.vtsProfilerHeadersName()),
+		}, &vtscProperties{
+			Mode:        "PROFILER",
+			Type:        "HEADER",
+			SpecName:    name.vtsSpecName(),
+			Outputs:     wrap("", vtsSpecs, ".h"),
+			PackagePath: name.dir(),
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
+			Name:                      proptools.StringPtr(name.vtsProfilerName()),
+			Defaults:                  []string{"VtsHalProfilerDefaults"},
+			Generated_sources:         []string{name.vtsProfilerSourcesName()},
+			Generated_headers:         []string{name.vtsProfilerHeadersName()},
+			Export_generated_headers:  []string{name.vtsProfilerHeadersName()},
+			Shared_libs:               wrap("", cppDependencies, "-vts.profiler"),
+			Export_shared_lib_headers: wrap("", cppDependencies, "-vts.profiler"),
+			Static_libs:               concat(cppDependencies, libraryIfExists),
+
+			// TODO(b/126244142)
+			Cflags: []string{"-Wno-unused-variable"},
+		}, &i.inheritCommonProperties)
+	}
 }
 
 func (h *hidlInterface) Name() string {
@@ -540,11 +741,13 @@ func hidlInterfaceFactory() android.Module {
 }
 
 var doubleLoadablePackageNames = []string{
+	"android.frameworks.bufferhub@1.0",
 	"android.hardware.cas@1.0",
 	"android.hardware.cas.native@1.0",
 	"android.hardware.configstore@",
 	"android.hardware.drm@1.0",
 	"android.hardware.drm@1.1",
+	"android.hardware.drm@1.2",
 	"android.hardware.graphics.allocator@",
 	"android.hardware.graphics.bufferqueue@",
 	"android.hardware.media@",
@@ -578,4 +781,38 @@ func isCorePackage(name string) bool {
 		}
 	}
 	return false
+}
+
+// TODO(b/126383715): centralize this logic/support filtering in core VTS build
+var coreVtsSpecs = []string{
+	"android.frameworks.",
+	"android.hardware.",
+	"android.hidl.",
+	"android.system.",
+}
+
+func isVtsSpecPackage(name string) bool {
+	for _, pkgname := range coreVtsSpecs {
+		if strings.HasPrefix(name, pkgname) {
+			return true
+		}
+	}
+	return false
+}
+
+var vtsListKey = android.NewOnceKey("vtsList")
+
+func vtsList(config android.Config) *android.Paths {
+	return config.Once(vtsListKey, func() interface{} {
+		return &android.Paths{}
+	}).(*android.Paths)
+}
+
+var vtsListMutex sync.Mutex
+
+func makeVarsProvider(ctx android.MakeVarsContext) {
+	vtsList := vtsList(ctx.Config()).Strings()
+	sort.Strings(vtsList)
+
+	ctx.Strict("VTS_SPEC_FILE_LIST", strings.Join(vtsList, " "))
 }
